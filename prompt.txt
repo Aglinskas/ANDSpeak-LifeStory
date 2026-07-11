@@ -1,0 +1,43 @@
+Create a chatBot application. 
+
+The goal of the app is to have a clinical speech biomarker application called ANDSpeak-patient. It has a chatBot interface, converses with a patient suspected to be at risk of dementia or cognitive decline. The app will ask a mix of questions in a turn by turn fashion, recording and transcribing audio in the background, and following up in an intelligent fashion. 
+
+Some questions will be clinically validated questionnaires for dementia screening
+Some questions will ask the person autobiographical questions like "tell me where you grew up", "describe your best friend", "favorite vacation memory"
+Some questions will be a picture description task
+
+
+Throughout all of this, audio is being recorded and transcribed, key events are logged (what question was asked, when did the person start and stop speaking etc)
+
+The audio files will later be analyzed for voice biomarkers and indications of possible cognitive decline (calculated as change in biomarkers across sessions). The voice biomarkers analysis is beyond the scope of this app though. The point of this app is to be fun, engaging and accurate in recording the patients interactions. Success of this app would be that it is fun to use for older people (>50 yo) and that participants are willing to do it daily and consistently.
+
+
+a big feature of the app is the story of my life, where the app asks the person about their life and builds their biography in the background. This is what the biographical questions are getting at. This is how this feature works. 
+Each user has a folder with a biography file. At the begging of the session, the an LLM agent reads the biography file and comes up with a plan to flesh it out and update it. If the biography is empty, the agent would start with basic questions, if its ritch and long the agent comes up with questions needed to flesh it out more. The overall goal is, as people use the app more and more to have an interesting biography, both for the patients to keep, but they can also print it or send it to their loved ones to read. It should capture informative and interesting aspects of the persons life. Importantly the way the agent asks these questions should be very human and non intrusive, it should feel like a rewarding conversation.
+
+
+The app should open up with a log in screen if this is the first time using the app. If not it should take it to the homepage 
+The homepage would have badges and statistics showing the number of completed sessions, total paragraphs in their biography, maybe other metrics. 
+
+
+When clicked it takes  you to a chatBot interface. At this point the audio starts recording and the recording does not end until the session is finished
+
+The chatBot gives the first prompt: "hello, how are you feeling today?"
+
+There should be an indication in audio waves that change as the subject is speaking to indicate being recorded. The spoken text should also show up as transcribed text in realtime 
+
+When a person speaks the audio should be transcribed in realtime using the OpenAI API. The server must read the API key from the `OPENAI_API_KEY` environment variable.
+
+The agent then asks the person some questions to fill out the biography. The amount of questions  might wary. The total duration of a session should be around 5 minutes, but really its about the total amount of works spoken by the subject. They should say at least 500 words. At the top of the app window there should be a counter showing session time and the number of words said by the speaker. 
+
+
+On the last question, instead of proceed the button says finish. When they click it the session is done, patient sees "thank you for finishing todays session" screen. the audio of the session is saved as an .mp3 file, the transcribed audio is saved in a .csv file with timestamps of what was said when. 
+
+
+The app should look like a professional, polished iPhone app, and have the same aspect ratio. 
+
+Look up the latest docs for openAI api for realtime transcription and text to speech.
+
+
+For trans openAI realtime API
+For reasoning about the questions use openAI GPT-5 nano

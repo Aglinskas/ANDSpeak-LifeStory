@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ANDSpeak – Your Life Story</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="app-wrapper">
+        <div class="iphone-frame">
+
+            <div class="iphone-notch">
+                <div class="camera-lens"></div>
+                <div class="speaker-grill"></div>
+            </div>
+
+            <div class="iphone-status-bar">
+                <div class="status-time" id="status-time">09:41</div>
+                <div class="status-icons">
+                    <svg class="icon-signal" viewBox="0 0 24 24" fill="currentColor">
+                        <rect x="3" y="16" width="3" height="4" rx="1"/>
+                        <rect x="8" y="12" width="3" height="8" rx="1"/>
+                        <rect x="13" y="8" width="3" height="12" rx="1"/>
+                        <rect x="18" y="4" width="3" height="16" rx="1"/>
+                    </svg>
+                    <span class="status-network">5G</span>
+                    <svg class="icon-battery" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M17 5H3a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zM18 9h2v6h-2V9z"/>
+                    </svg>
+                </div>
+            </div>
+
+            <div class="screen-container">
+
+                <!-- SCREEN: LOGIN -->
+                <div id="screen-login" class="screen active">
+                    <div class="auth-panel">
+                        <div class="home-logo auth-logo">
+                            <div class="logo-ring ring-1"></div>
+                            <div class="logo-ring ring-2"></div>
+                            <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M12 18.5a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13z"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M12 9.75v4.5M9.75 12h4.5"/>
+                            </svg>
+                        </div>
+                        <h1 class="auth-title">ANDSpeak</h1>
+                        <p class="auth-subtitle">Sign in to your Life Story</p>
+
+                        <form id="login-form" class="auth-form">
+                            <label class="auth-field">
+                                <span>Username</span>
+                                <input type="text" id="login-username" autocomplete="username" required>
+                            </label>
+                            <label class="auth-field">
+                                <span>Password</span>
+                                <input type="password" id="login-password" autocomplete="current-password" required>
+                            </label>
+                            <div class="auth-error" id="login-error"></div>
+                            <button type="submit" class="btn btn-primary">Log In</button>
+                        </form>
+
+                        <button id="btn-show-create-user" class="auth-link-btn" type="button">Create new user</button>
+                    </div>
+                </div>
+
+                <!-- SCREEN: CREATE USER -->
+                <div id="screen-create-user" class="screen">
+                    <div class="settings-header">
+                        <button id="btn-create-back" class="settings-back-btn" aria-label="Back">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                <polyline points="15 18 9 12 15 6"/>
+                            </svg>
+                            Back
+                        </button>
+                        <h2 class="settings-title">Create User</h2>
+                        <div class="settings-header-spacer"></div>
+                    </div>
+
+                    <div class="auth-panel auth-panel-top">
+                        <form id="create-gate-form" class="auth-form">
+                            <label class="auth-field">
+                                <span>Create-user password</span>
+                                <input type="password" id="create-gate-password" autocomplete="off" required>
+                            </label>
+                            <div class="auth-error" id="create-gate-error"></div>
+                            <button type="submit" class="btn btn-primary">Continue</button>
+                        </form>
+
+                        <form id="create-user-form" class="auth-form hidden">
+                            <label class="auth-field">
+                                <span>New username</span>
+                                <input type="text" id="create-username" autocomplete="username" required>
+                            </label>
+                            <label class="auth-field">
+                                <span>New password</span>
+                                <input type="password" id="create-password" autocomplete="new-password" required>
+                            </label>
+                            <div class="auth-field">
+                                <span>Gender</span>
+                                <div class="gender-selector">
+                                    <label>
+                                        <input type="radio" name="create-gender" value="M" required>
+                                        <span>M</span>
+                                    </label>
+                                    <label>
+                                        <input type="radio" name="create-gender" value="F" required>
+                                        <span>F</span>
+                                    </label>
+                                </div>
+                            </div>
+                            <label class="auth-field">
+                                <span>Age: <strong id="create-age-value">34</strong></span>
+                                <input type="range" class="settings-slider" id="create-age" min="1" max="100" step="1" value="34" required>
+                            </label>
+
+                            <div class="onboarding-voice-card">
+                                <div class="onboarding-voice-title">Tell me a little bit about yourself</div>
+                                <div class="setting-desc">Optional. For example: "I live in Italy, I am a neuroscientist, and I like hiking and hanging out with my girlfriend."</div>
+                                <div id="create-about-idle" class="personality-actions">
+                                    <button id="btn-record-create-about" type="button" class="personality-record-btn">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                                            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                                            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                                            <line x1="12" y1="19" x2="12" y2="23"/>
+                                            <line x1="8" y1="23" x2="16" y2="23"/>
+                                        </svg>
+                                        Speak intro
+                                    </button>
+                                    <button id="btn-clear-create-about" type="button" class="personality-clear-btn hidden">Clear</button>
+                                </div>
+                                <div id="create-about-recording" class="personality-recording-row hidden">
+                                    <span class="personality-rec-dot"></span>
+                                    <span class="personality-rec-label">Listening...</span>
+                                    <button id="btn-stop-create-about" type="button" class="personality-stop-btn">Stop</button>
+                                </div>
+                                <div id="create-about-transcribing" class="personality-transcribing hidden">
+                                    <span class="personality-transcribing-text">Transcribing...</span>
+                                </div>
+                                <div id="create-about-preview" class="personality-preview hidden">
+                                    <div class="personality-preview-label">Transcribed:</div>
+                                    <div id="create-about-preview-text" class="personality-preview-text"></div>
+                                </div>
+                                <div class="personality-status" id="create-about-status"></div>
+                            </div>
+
+                            <div class="onboarding-voice-card">
+                                <div class="onboarding-voice-title">Image likeness</div>
+                                <div class="setting-desc">Optional. For example: "I have blonde hair" or "I have long hair and a beard."</div>
+                                <div id="create-likeness-idle" class="personality-actions">
+                                    <button id="btn-record-create-likeness" type="button" class="personality-record-btn">
+                                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                                            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                                            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                                            <line x1="12" y1="19" x2="12" y2="23"/>
+                                            <line x1="8" y1="23" x2="16" y2="23"/>
+                                        </svg>
+                                        Speak likeness
+                                    </button>
+                                    <button id="btn-clear-create-likeness" type="button" class="personality-clear-btn hidden">Clear</button>
+                                </div>
+                                <div id="create-likeness-recording" class="personality-recording-row hidden">
+                                    <span class="personality-rec-dot"></span>
+                                    <span class="personality-rec-label">Listening...</span>
+                                    <button id="btn-stop-create-likeness" type="button" class="personality-stop-btn">Stop</button>
+                                </div>
+                                <div id="create-likeness-transcribing" class="personality-transcribing hidden">
+                                    <span class="personality-transcribing-text">Transcribing...</span>
+                                </div>
+                                <div id="create-likeness-preview" class="personality-preview hidden">
+                                    <div class="personality-preview-label">Transcribed:</div>
+                                    <div id="create-likeness-preview-text" class="personality-preview-text"></div>
+                                </div>
+                                <div class="personality-status" id="create-likeness-status"></div>
+                            </div>
+                            <div class="auth-error" id="create-user-error"></div>
+                            <div class="auth-success" id="create-user-success"></div>
+                            <button type="submit" class="btn btn-primary">Create User</button>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- SCREEN 1: HOME -->
+                <div id="screen-home" class="screen">
+                    <button id="btn-settings" class="gear-btn" aria-label="Settings">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                            <circle cx="12" cy="12" r="3"/>
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                        </svg>
+                    </button>
+	                    <div class="home-top">
+	                        <div class="home-logo">
+	                            <div class="logo-ring ring-1"></div>
+	                            <div class="logo-ring ring-2"></div>
+	                            <svg class="logo-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+	                                <path stroke-linecap="round" stroke-linejoin="round" d="M12 18.5a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13z"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M12 9.75v4.5M9.75 12h4.5"/>
+                            </svg>
+                        </div>
+	
+	                        <h1 class="home-title">ANDSpeak</h1>
+	                        <p class="home-subtitle">Your Life Story</p>
+                            <div class="current-user-pill" id="current-user-pill"></div>
+	
+	                        <div class="portrait-frame" id="home-portrait-frame">
+	                            <img class="portrait-img" id="home-portrait" alt="Your life-story portrait">
+	                        </div>
+
+	                        <button id="btn-start" class="btn btn-primary pulse-effect">
+	                            Start Today's Session
+	                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="icon-arrow">
+	                                <line x1="5" y1="12" x2="19" y2="12"/>
+	                                <polyline points="12 5 19 12 12 19"/>
+	                            </svg>
+	                        </button>
+
+	                        <p class="home-description">
+	                            Today's session will explore your life through conversation. Speak naturally — your story is being built, one session at a time.
+	                        </p>
+
+	                        <div class="stats-grid">
+	                            <div class="stat-card stat-card-tappable" id="stat-card-sessions">
+	                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="stat-icon-home">
+	                                    <circle cx="12" cy="12" r="10"/>
+	                                    <polyline points="12 6 12 12 16 14"/>
+                                </svg>
+                                <div class="stat-number" id="home-sessions">–</div>
+                                <div class="stat-card-label">Sessions</div>
+                                <div class="stat-card-hint">Tap to view</div>
+                            </div>
+                            <div class="stat-card stat-card-tappable" id="stat-card-biography">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="stat-icon-home">
+                                    <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                                    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>
+                                </svg>
+                                <div class="stat-number" id="home-paragraphs">–</div>
+                                <div class="stat-card-label">Biography Paragraphs</div>
+	                                <div class="stat-card-hint">Tap to read</div>
+	                            </div>
+	                        </div>
+	                    </div>
+	                </div>
+
+                <!-- SCREEN 2: CHAT -->
+                <div id="screen-chat" class="screen">
+                    <header class="chat-header">
+                        <div class="header-left">
+                            <div class="rec-badge">
+                                <span class="rec-dot"></span>
+                                <span class="rec-text">REC</span>
+                            </div>
+                            <button id="btn-end-session" class="end-session-btn" aria-label="End session">
+                                <svg viewBox="0 0 24 24" fill="currentColor">
+                                    <rect x="5" y="5" width="14" height="14" rx="2"/>
+                                </svg>
+                                End
+                            </button>
+                        </div>
+                        <div class="header-center">
+                            <div class="session-title">Life Story</div>
+                        </div>
+                        <div class="header-right">
+                            <div class="header-right-stats">
+                                <div class="timer" id="session-timer">00:00</div>
+                                <div class="word-counter" id="word-counter">0 words</div>
+                            </div>
+                            <button id="btn-chat-settings" class="chat-gear-btn" aria-label="Microphone settings">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+                                    <circle cx="12" cy="12" r="3"/>
+                                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                                </svg>
+                            </button>
+                        </div>
+                    </header>
+
+                    <div class="chat-area" id="chat-messages"></div>
+
+                    <div class="visualizer-container">
+                        <div class="visualizer-wave-box">
+                            <canvas id="visualizer-canvas" class="visualizer-canvas"></canvas>
+                        </div>
+                        <div class="visualizer-status" id="visualizer-status">Initializing…</div>
+                    </div>
+
+                    <div class="transcript-box">
+                        <div class="transcript-title">Your Response</div>
+                        <div class="transcript-body-container">
+                            <textarea id="live-transcript" class="transcript-textarea" placeholder="Speak into the microphone… your words will appear here." disabled></textarea>
+                            <div class="loading-dots" id="transcript-loading">
+                                <span></span><span></span><span></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="chat-controls">
+                        <button id="btn-proceed" class="btn btn-primary" disabled>
+                            Proceed
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="icon-arrow">
+                                <line x1="5" y1="12" x2="19" y2="12"/>
+                                <polyline points="12 5 19 12 12 19"/>
+                            </svg>
+                        </button>
+                    </div>
+
+                    <!-- Slide-up settings drawer (accessible during session) -->
+                    <div id="session-drawer" class="session-drawer">
+                        <div class="drawer-bar">
+                            <span class="drawer-title">Microphone Settings</span>
+                            <button id="btn-drawer-close" class="drawer-close-btn" aria-label="Close">✕</button>
+                        </div>
+
+                        <div class="drawer-setting">
+                            <div class="drawer-setting-row">
+                                <span class="drawer-setting-label">Sensitivity</span>
+                                <span class="drawer-setting-val" id="drawer-val-threshold">0.65</span>
+                            </div>
+                            <div class="slider-wrapper">
+                                <div class="slider-track-bg grad-threshold"></div>
+                                <input type="range" class="settings-slider" id="drawer-slider-threshold"
+                                       min="30" max="90" step="5">
+                            </div>
+                        </div>
+
+                        <div class="drawer-setting">
+                            <div class="drawer-setting-row">
+                                <span class="drawer-setting-label">Pause Length</span>
+                                <span class="drawer-setting-val" id="drawer-val-silence">1.0 sec</span>
+                            </div>
+                            <div class="slider-wrapper">
+                                <div class="slider-track-bg grad-silence"></div>
+                                <input type="range" class="settings-slider" id="drawer-slider-silence"
+                                       min="400" max="2000" step="100">
+                            </div>
+                        </div>
+
+                        <details class="drawer-advanced">
+                            <summary>Advanced transcription</summary>
+                            <label class="toggle-row compact">
+                                <span>
+                                    <strong>Mute mic during bot speech</strong>
+                                    <small>Prevents speaker audio from entering the transcription stream.</small>
+                                </span>
+                                <input type="checkbox" id="drawer-adv-mute-mic">
+                            </label>
+                            <label class="toggle-row compact">
+                                <span>
+                                    <strong>Ignore bot-turn transcripts</strong>
+                                    <small>Drops transcripts received while the patient turn is inactive.</small>
+                                </span>
+                                <input type="checkbox" id="drawer-adv-ignore-tts">
+                            </label>
+                            <label class="toggle-row compact">
+                                <span>
+                                    <strong>Filter filler hallucinations</strong>
+                                    <small>Removes standalone or leading “bye” / “thank you” fragments.</small>
+                                </span>
+                                <input type="checkbox" id="drawer-adv-filter-fillers">
+                            </label>
+                            <label class="toggle-row compact">
+                                <span>
+                                    <strong>Realtime debug logging</strong>
+                                    <small>Logs VAD and transcript events in the browser console.</small>
+                                </span>
+                                <input type="checkbox" id="drawer-adv-debug">
+                            </label>
+                        </details>
+
+                        <div class="drawer-status" id="drawer-status"></div>
+                    </div>
+                </div>
+
+                <!-- SCREEN 3: FINISH -->
+                <div id="screen-finish" class="screen">
+                    <div class="finish-icon-box">
+                        <div class="success-ring"></div>
+                        <svg class="success-checkmark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                            <polyline points="20 6 9 17 4 12"/>
+                        </svg>
+                    </div>
+
+                    <h2 class="finish-title">Session Complete</h2>
+                    <p class="finish-message">Thank you for sharing your story today.</p>
+
+                    <div class="portrait-frame" id="finish-portrait-frame">
+                        <img class="portrait-img" id="finish-portrait" alt="Your life-story portrait">
+                        <div class="portrait-caption" id="finish-portrait-caption">Painting your story…</div>
+                    </div>
+
+                    <div class="stats-card">
+                        <h3>Summary</h3>
+                        <div class="stat-row">
+                            <span class="stat-label">Duration</span>
+                            <span class="stat-value" id="stat-duration">–</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Words Spoken</span>
+                            <span class="stat-value" id="stat-words">–</span>
+                        </div>
+                        <div class="stat-row">
+                            <span class="stat-label">Biography Paragraphs</span>
+                            <span class="stat-value" id="stat-paragraphs">–</span>
+                        </div>
+                    </div>
+
+                    <button id="btn-home" class="btn btn-secondary">
+                        Back to Home
+                    </button>
+                </div>
+
+                <!-- SCREEN 5: BIOGRAPHY (vintage book) -->
+                <div id="screen-biography" class="screen">
+                    <div class="settings-header">
+                        <button id="btn-bio-back" class="settings-back-btn" aria-label="Back">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                <polyline points="15 18 9 12 15 6"/>
+                            </svg>
+                            Back
+                        </button>
+                        <h2 class="settings-title">My Story</h2>
+                        <div class="settings-header-spacer"></div>
+                    </div>
+
+                    <div class="bio-scroll-area">
+                        <div class="bio-book-page">
+                            <div class="bio-book-inner">
+                                <div class="bio-ornament">❧</div>
+                                <h3 class="bio-chapter-title">Life Story</h3>
+                                <div class="bio-divider">── ✦ ──</div>
+                                <div id="bio-content" class="bio-paragraphs">
+                                    <p class="bio-loading">Loading your story…</p>
+                                </div>
+                                <div class="book-order-section">
+                                    <button class="order-book-btn" type="button" disabled>Order printed book</button>
+                                    <p class="book-order-note">Your printed book will become available to order once your assigned sessions are complete.</p>
+                                </div>
+                                <div class="bio-page-foot">── ❧ ──</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SCREEN 6: SESSIONS -->
+                <div id="screen-sessions" class="screen">
+                    <div class="settings-header">
+                        <button id="btn-sessions-back" class="settings-back-btn" aria-label="Back">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                <polyline points="15 18 9 12 15 6"/>
+                            </svg>
+                            Back
+                        </button>
+                        <h2 class="settings-title">Sessions</h2>
+                        <div class="settings-header-spacer"></div>
+                    </div>
+
+	                    <div id="sessions-list" class="sessions-list">
+	                        <p class="sessions-loading">Loading sessions…</p>
+	                    </div>
+	                </div>
+
+	                <!-- SCREEN 7: IMAGE EXPLORER -->
+	                <div id="screen-image-explorer" class="screen">
+	                    <div class="settings-header image-explorer-header">
+	                        <button id="btn-image-back" class="settings-back-btn" aria-label="Back">
+	                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+	                                <polyline points="15 18 9 12 15 6"/>
+	                            </svg>
+	                            Back
+	                        </button>
+	                        <h2 class="settings-title">Story Images</h2>
+	                        <div class="settings-header-spacer"></div>
+	                    </div>
+
+	                    <div class="image-explorer-content">
+	                        <div class="image-viewer" id="image-viewer">
+	                            <img id="image-viewer-img" class="image-viewer-img" alt="Generated story image">
+	                        </div>
+	                        <div class="image-viewer-hint">Drag to pan. Double tap to reset.</div>
+
+	                        <div class="image-gallery-section">
+	                            <h3 class="image-gallery-title">Previous Images</h3>
+	                            <div id="image-gallery-grid" class="image-gallery-grid"></div>
+	                        </div>
+
+	                        <div class="print-order-section">
+	                            <button class="order-print-btn" type="button" disabled>Order print</button>
+	                            <p class="print-order-note">0 available. Every 10,000 words you speak unlocks a free printed image delivered to you</p>
+	                        </div>
+	                    </div>
+	                </div>
+
+	                <!-- SCREEN 4: SETTINGS -->
+	                <div id="screen-settings" class="screen">
+
+                    <div class="settings-header">
+                        <button id="btn-settings-back" class="settings-back-btn" aria-label="Back">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                <polyline points="15 18 9 12 15 6"/>
+                            </svg>
+                            Back
+                        </button>
+                        <h2 class="settings-title">Settings</h2>
+                        <div class="settings-header-spacer"></div>
+                    </div>
+
+                    <div class="settings-content">
+
+                        <!-- Microphone Sensitivity -->
+                        <div class="setting-card">
+                            <div class="setting-name">Microphone Sensitivity</div>
+                            <div class="setting-desc">
+                                Controls how loudly you need to speak before the app starts listening.
+                                If random words appear that you didn't say, move the slider slightly to the right.
+                                If your voice isn't being picked up at the start of sentences, move it left.
+                            </div>
+                            <div class="slider-end-labels">
+                                <span>More sensitive</span>
+                                <span>Less sensitive</span>
+                            </div>
+                            <div class="slider-wrapper">
+                                <div class="slider-track-bg grad-threshold"></div>
+                                <input type="range" class="settings-slider" id="slider-threshold"
+                                       min="30" max="90" step="5" value="65">
+                            </div>
+                            <div class="slider-bottom-row">
+                                <div class="zone-legend">
+                                    <span class="zone-dot red"></span> Too sensitive
+                                    <span class="zone-dot green"></span> Best range
+                                    <span class="zone-dot amber"></span> May miss voice
+                                </div>
+                                <div class="slider-val" id="val-threshold">0.65</div>
+                            </div>
+                        </div>
+
+                        <!-- Speaking Pause -->
+                        <div class="setting-card">
+                            <div class="setting-name">Speaking Pause Length</div>
+                            <div class="setting-desc">
+                                How long the app waits after you stop speaking before it saves what you said.
+                                If it cuts you off mid-sentence, move the slider to the right.
+                                If responses feel slow to register, move it left.
+                            </div>
+                            <div class="slider-end-labels">
+                                <span>Shorter pause</span>
+                                <span>Longer pause</span>
+                            </div>
+                            <div class="slider-wrapper">
+                                <div class="slider-track-bg grad-silence"></div>
+                                <input type="range" class="settings-slider" id="slider-silence"
+                                       min="400" max="2000" step="100" value="1000">
+                            </div>
+                            <div class="slider-bottom-row">
+                                <div class="zone-legend">
+                                    <span class="zone-dot red"></span> Cuts off early
+                                    <span class="zone-dot green"></span> Best range
+                                    <span class="zone-dot amber"></span> Slow response
+                                </div>
+                                <div class="slider-val" id="val-silence">1.0 sec</div>
+                            </div>
+                        </div>
+
+                        <!-- Agent Personality -->
+                        <div class="setting-card">
+                            <div class="setting-name">Agent Personality</div>
+                            <div class="setting-desc">
+                                Speak a personal instruction to guide how the agent talks with you —
+                                for example: "don't ask me about my work", "use simpler words", or "be briefer".
+                                Instructions are remembered across all sessions.
+                            </div>
+
+                            <div class="personality-additions-box" id="personality-additions-display">
+                                <span class="personality-empty">No custom instructions yet.</span>
+                            </div>
+
+                            <!-- Normal state: record button -->
+                            <div id="personality-idle" class="personality-actions">
+                                <button id="btn-record-personality" class="personality-record-btn">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                                        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+                                        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+                                        <line x1="12" y1="19" x2="12" y2="23"/>
+                                        <line x1="8" y1="23" x2="16" y2="23"/>
+                                    </svg>
+                                    Add voice instruction
+                                </button>
+                                <button id="btn-personality-clear" class="personality-clear-btn hidden">Clear all</button>
+                            </div>
+
+                            <!-- Recording state -->
+                            <div id="personality-recording" class="personality-recording-row hidden">
+                                <span class="personality-rec-dot"></span>
+                                <span class="personality-rec-label">Listening…</span>
+                                <button id="btn-personality-stop" class="personality-stop-btn">Stop</button>
+                            </div>
+
+                            <!-- Preview state: confirm or discard -->
+                            <div id="personality-preview" class="personality-preview hidden">
+                                <div class="personality-preview-label">Transcribed:</div>
+                                <div id="personality-preview-text" class="personality-preview-text"></div>
+                                <div class="personality-preview-actions">
+                                    <button id="btn-personality-add" class="personality-add-btn">Add instruction</button>
+                                    <button id="btn-personality-discard" class="personality-discard-btn">Discard</button>
+                                </div>
+                            </div>
+
+                            <!-- Transcribing state -->
+                            <div id="personality-transcribing" class="personality-transcribing hidden">
+                                <span class="personality-transcribing-text">Transcribing…</span>
+                            </div>
+
+	                            <div class="personality-status" id="personality-status"></div>
+	                        </div>
+
+	                        <!-- Image Likeness -->
+	                        <div class="setting-card">
+	                            <div class="setting-name">Image Likeness Instructions</div>
+	                            <div class="setting-desc">
+	                                Speak visual details that should guide future generated images —
+	                                for example: "I have blonde hair", "my glasses are round", or "make my beard shorter".
+	                                These are remembered across sessions and override inferred appearance.
+	                            </div>
+
+	                            <div class="personality-additions-box" id="likeness-instructions-display">
+	                                <span class="personality-empty">No likeness instructions yet.</span>
+	                            </div>
+
+	                            <div id="likeness-idle" class="personality-actions">
+	                                <button id="btn-record-likeness" class="personality-record-btn">
+	                                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+	                                        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+	                                        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+	                                        <line x1="12" y1="19" x2="12" y2="23"/>
+	                                        <line x1="8" y1="23" x2="16" y2="23"/>
+	                                    </svg>
+	                                    Add likeness instruction
+	                                </button>
+	                                <button id="btn-likeness-clear" class="personality-clear-btn hidden">Clear all</button>
+	                            </div>
+
+	                            <div id="likeness-recording" class="personality-recording-row hidden">
+	                                <span class="personality-rec-dot"></span>
+	                                <span class="personality-rec-label">Listening…</span>
+	                                <button id="btn-likeness-stop" class="personality-stop-btn">Stop</button>
+	                            </div>
+
+	                            <div id="likeness-preview" class="personality-preview hidden">
+	                                <div class="personality-preview-label">Transcribed:</div>
+	                                <div id="likeness-preview-text" class="personality-preview-text"></div>
+	                                <div class="personality-preview-actions">
+	                                    <button id="btn-likeness-add" class="personality-add-btn">Add instruction</button>
+	                                    <button id="btn-likeness-discard" class="personality-discard-btn">Discard</button>
+	                                </div>
+	                            </div>
+
+	                            <div id="likeness-transcribing" class="personality-transcribing hidden">
+	                                <span class="personality-transcribing-text">Transcribing…</span>
+	                            </div>
+
+	                            <div class="personality-status" id="likeness-status"></div>
+	                        </div>
+
+	                        <details class="setting-card advanced-card">
+                            <summary>Advanced Transcription Settings</summary>
+                            <div class="setting-desc advanced-desc">
+                                Experimental controls for reducing short false transcripts such as “bye”
+                                or “thank you.” Changes apply immediately during an active session where possible.
+                            </div>
+                            <label class="toggle-row">
+                                <span>
+                                    <strong>Mute microphone while the chatbot speaks</strong>
+                                    <small>Best first defense against the app transcribing its own audio.</small>
+                                </span>
+                                <input type="checkbox" id="adv-mute-mic">
+                            </label>
+                            <label class="toggle-row">
+                                <span>
+                                    <strong>Ignore transcripts outside patient turns</strong>
+                                    <small>Drops realtime transcript events when the response box is disabled.</small>
+                                </span>
+                                <input type="checkbox" id="adv-ignore-tts">
+                            </label>
+                            <label class="toggle-row">
+                                <span>
+                                    <strong>Filter common hallucinated fillers</strong>
+                                    <small>Removes standalone or leading “bye,” “thanks,” and “thank you” fragments.</small>
+                                </span>
+                                <input type="checkbox" id="adv-filter-fillers">
+                            </label>
+                            <label class="toggle-row">
+                                <span>
+                                    <strong>Realtime debug logging</strong>
+                                    <small>Shows VAD starts/stops and transcript chunks in the browser console.</small>
+                                </span>
+                                <input type="checkbox" id="adv-debug">
+                            </label>
+                        </details>
+
+                        <!-- Account -->
+                        <div class="setting-card account-card">
+                            <div class="setting-name">Account</div>
+                            <div class="setting-desc">
+                                Signed in as <strong id="settings-current-user">-</strong>.
+                            </div>
+                            <div class="account-actions">
+                                <button id="btn-show-change-password" class="personality-add-btn" type="button">Change password</button>
+                                <button id="btn-logout" class="personality-clear-btn" type="button">Log out</button>
+                            </div>
+                            <div id="change-password-panel" class="password-panel hidden">
+                                <form id="change-password-form" class="account-form">
+                                    <label class="auth-field compact">
+                                        <span>Current password</span>
+                                        <input type="password" id="current-password" autocomplete="current-password">
+                                    </label>
+                                    <label class="auth-field compact">
+                                        <span>New password</span>
+                                        <input type="password" id="new-password" autocomplete="new-password">
+                                    </label>
+                                    <div class="auth-error" id="change-password-error"></div>
+                                    <div class="auth-success" id="change-password-success"></div>
+                                    <button type="submit" class="personality-add-btn">Save new password</button>
+                                </form>
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <div class="settings-footer">
+                        <div class="save-status" id="save-status"></div>
+                        <button id="btn-settings-done" class="btn btn-primary">Done</button>
+                    </div>
+
+                </div>
+
+            </div>
+
+            <div class="iphone-home-indicator"></div>
+        </div>
+    </div>
+
+    <audio id="tts-audio" style="display:none;"></audio>
+    <script src="/app.js"></script>
+</body>
+</html>

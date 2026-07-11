@@ -1,0 +1,16 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.env
+.env.*
+open_AI_key.txt
+
+# User/private runtime data
+subject_data/
+
+# Legacy/generated audio and session artifacts
+static/audio/
+*.mp3
+*.webm
+*.wav
+*.m4a
