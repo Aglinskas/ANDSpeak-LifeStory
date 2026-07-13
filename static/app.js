@@ -273,7 +273,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     el.btnStart.addEventListener('click', startSession);
     el.btnProceed.addEventListener('click', handleProceed);
-    el.btnEndSession.addEventListener('click', finishSession);
+    el.btnEndSession.addEventListener('click', () => wrapUpSession());
     el.btnHome.addEventListener('click', goHome);
 
     // Tappable stat cards
@@ -1197,9 +1197,9 @@ async function handleProceed() {
         flushPartial({ includeAudio: true });
     }
 
-    // Hit 500-word minimum — end immediately
+    // Hit 500-word target — close warmly before saving.
     if (state.totalWordCount >= 500) {
-        await finishSession();
+        await wrapUpSession();
         return;
     }
 
@@ -1238,7 +1238,9 @@ async function handleProceed() {
 
     } catch (err) {
         console.error('Next question error:', err);
-        await finishSession();
+        await wrapUpSession({
+            closingText: "Thank you for sharing all of that with me. I look forward to chatting more next time."
+        });
     }
 }
 
@@ -1444,6 +1446,22 @@ function refreshTranscriptUI() {
 }
 
 // ─── Finish session ───────────────────────────────────────────────────────────
+
+async function wrapUpSession({ closingText = "Thank you for sharing all of that with me. I look forward to chatting more next time." } = {}) {
+    if (state.isFinishing || state.sessionSaved) return;
+    el.liveTranscript.disabled      = true;
+    el.btnProceed.disabled          = true;
+    el.btnEndSession.disabled       = true;
+    el.visualizerStatus.textContent = 'Wrapping up…';
+    setPatientSpeechActive(false);
+
+    await askDynamicQuestion({
+        acknowledgment: closingText,
+        question: '',
+        action: 'wrap_up',
+        question_meta: { topic: 'session_close', mode: 'wrap_up', keywords: [] }
+    });
+}
 
 async function finishSession() {
     if (state.isFinishing || state.sessionSaved) return;
