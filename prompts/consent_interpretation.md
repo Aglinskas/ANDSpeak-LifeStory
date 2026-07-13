@@ -4,7 +4,7 @@ WHAT: Runs only right after the agent asked a "checkpoint" question ("would you 
 to keep talking about this, or move on?"). Reads the participant's reply and decides
 whether they want to CONTINUE on the topic. A dedicated yes/no classifier is used
 here because the general decision model is unreliable at reading a bare "yes".
-MODEL: FOLLOWUP_DECISION_MODEL (set in session_config.md)
+MODEL ROLE: `followup_decision` (set in `openai_models_used.json`)
 
 No variables. The recent conversation is passed as the user message automatically.
 

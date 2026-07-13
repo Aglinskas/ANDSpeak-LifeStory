@@ -95,6 +95,12 @@ export ANDSPEAK_SECRET_KEY='make-this-a-long-random-string'
 
 If `ANDSPEAK_SECRET_KEY` is not set, the app generates one at startup, which means users will be logged out whenever the server restarts.
 
+## OpenAI models
+
+All OpenAI model names are configured in `openai_models_used.json`. Edit that file to change
+the model used for any role. The app does not contain fallback model names: if this file is
+missing, malformed, or incomplete, the affected operation fails with a configuration error.
+
 ## Running locally
 
 Prerequisites:

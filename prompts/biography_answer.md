@@ -2,7 +2,7 @@
 
 WHAT: Runs when the participant directly asks what the agent knows or remembers
 about their own life story.
-MODEL: FOLLOWUP_DECISION_MODEL (set in session_config.md)
+MODEL ROLE: `followup_decision` (set in `openai_models_used.json`)
 ALSO SEES: the stored biography and recent conversation context in the user
 message.
 

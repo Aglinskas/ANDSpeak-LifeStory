@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import urllib.request
 import urllib.error
+import urllib.parse
 from difflib import SequenceMatcher
 from string import Template
 from datetime import datetime
@@ -31,6 +32,59 @@ if not api_key:
     )
 
 client = OpenAI(api_key=api_key)
+
+OPENAI_MODELS_PATH = 'openai_models_used.json'
+REQUIRED_OPENAI_MODEL_KEYS = (
+    'question_preparation',
+    'followup_decision',
+    'portrait_brief',
+    'portrait_image',
+    'realtime',
+    'realtime_transcription',
+    'audio_transcription',
+    'text_to_speech',
+)
+
+
+def _load_openai_models():
+    """Load the required model names from the single source-of-truth JSON file."""
+    try:
+        with open(OPENAI_MODELS_PATH, 'r', encoding='utf-8') as f:
+            models = json.load(f)
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"Required OpenAI model configuration is missing: {OPENAI_MODELS_PATH}"
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Invalid JSON in {OPENAI_MODELS_PATH}: {exc}"
+        ) from exc
+
+    if not isinstance(models, dict):
+        raise RuntimeError(f"{OPENAI_MODELS_PATH} must contain a JSON object")
+
+    missing = [key for key in REQUIRED_OPENAI_MODEL_KEYS if key not in models]
+    invalid = [
+        key for key in REQUIRED_OPENAI_MODEL_KEYS
+        if key in models and (not isinstance(models[key], str) or not models[key].strip())
+    ]
+    if missing or invalid:
+        problems = []
+        if missing:
+            problems.append(f"missing keys: {', '.join(missing)}")
+        if invalid:
+            problems.append(f"empty or non-string values: {', '.join(invalid)}")
+        raise RuntimeError(f"Invalid {OPENAI_MODELS_PATH}: {'; '.join(problems)}")
+
+    return {key: models[key].strip() for key in REQUIRED_OPENAI_MODEL_KEYS}
+
+
+def _openai_model(role):
+    return _load_openai_models()[role]
+
+
+# Fail at startup when the required source file is missing or invalid.
+_load_openai_models()
 
 SUBJECT_ROOT = 'subject_data'
 USER_STORE_PATH = os.path.join(SUBJECT_ROOT, 'users.json')
@@ -276,21 +330,15 @@ def _reload_config():
     config      = _load_text('session_config.md')
 
     # Parse the tunable knobs from session_config.md (KEY = value lines)
-    model_large  = 'gpt-5.5-2026-04-23'
-    model_fast   = 'gpt-5-nano'
     max_turns    = 15
     max_followup = 2
     for line in config.splitlines():
-        m = re.match(r'QUESTION_PREPARATION_MODEL\s*=\s*(\S+)', line)
-        if m: model_large = m.group(1)
-        m = re.match(r'FOLLOWUP_DECISION_MODEL\s*=\s*(\S+)', line)
-        if m: model_fast = m.group(1)
         m = re.match(r'MAX_TURNS\s*=\s*(\d+)', line)
         if m: max_turns = int(m.group(1))
         m = re.match(r'MAX_FOLLOWUP_DEPTH\s*=\s*(\d+)', line)
         if m: max_followup = int(m.group(1))
 
-    return personality, config, model_large, model_fast, max_turns, max_followup
+    return personality, config, max_turns, max_followup
 
 
 def read_personality_additions(user_id=None):
@@ -343,9 +391,9 @@ def get_effective_personality(user_id=None):
         )
     return AGENT_PERSONALITY
 
-(AGENT_PERSONALITY, SESSION_CONFIG, MODEL_LARGE, MODEL_FAST,
+(AGENT_PERSONALITY, SESSION_CONFIG,
  MAX_TURNS, MAX_FOLLOWUP_DEPTH) = _reload_config()
-print(f"[CONFIG] question model={MODEL_LARGE}  follow-up model={MODEL_FAST}  "
+print(f"[CONFIG] OpenAI models loaded from {OPENAI_MODELS_PATH}  "
       f"max_turns={MAX_TURNS}  max_followup={MAX_FOLLOWUP_DEPTH}")
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
@@ -635,11 +683,13 @@ def session_plan():
         session_id = request_session_id() or datetime.now().strftime("%Y%m%d_%H%M%S")
         current_session_output_dir(user_id, session_id)
         # Reload config on each session start so edits take effect without restart
-        global AGENT_PERSONALITY, SESSION_CONFIG, MODEL_LARGE, MODEL_FAST
+        global AGENT_PERSONALITY, SESSION_CONFIG
         global MAX_TURNS, MAX_FOLLOWUP_DEPTH
-        (AGENT_PERSONALITY, SESSION_CONFIG, MODEL_LARGE, MODEL_FAST,
+        (AGENT_PERSONALITY, SESSION_CONFIG,
          MAX_TURNS, MAX_FOLLOWUP_DEPTH) = _reload_config()
-        print(f"[CONFIG] Reloaded — question model={MODEL_LARGE}  follow-up model={MODEL_FAST}")
+        models = _load_openai_models()
+        question_model = models['question_preparation']
+        print(f"[CONFIG] Reloaded OpenAI models from {OPENAI_MODELS_PATH}")
 
         check_for_partial_saves(user_id)
         clear_session_temp(user_id)
@@ -673,7 +723,7 @@ def session_plan():
             )
 
         completion = client.chat.completions.create(
-            model=MODEL_LARGE,
+            model=question_model,
             messages=[
                 {'role': 'system', 'content': system_prompt},
                 {'role': 'user',   'content': user_content}
@@ -689,13 +739,14 @@ def session_plan():
             'biography_present': bool(biography),
             'biography_chars':   len(biography),
             'biography_keywords': biography_keywords,
-            'model':             MODEL_LARGE,
+            'model':             question_model,
             'output':            result,
             'normalized_questions': questions
         }, 'session_plan')
 
         return jsonify({
             'session_id': session_id,
+            'realtime_transcription_model': models['realtime_transcription'],
             'greeting':  result.get('greeting',  f'Hello, {user_id}! How has your day been?'),
             'questions': questions
         })
@@ -1132,7 +1183,7 @@ def _answer_biography_question(user_question, biography, prior_text):
     )
 
     completion = client.chat.completions.create(
-        model=MODEL_FAST,
+        model=_openai_model('followup_decision'),
         messages=[
             {'role': 'system', 'content': system_prompt},
             {'role': 'user',   'content': user_content}
@@ -1294,7 +1345,7 @@ def _interpret_turn(latest_exchange, biography, prepared_questions):
 
     try:
         completion = client.chat.completions.create(
-            model=MODEL_FAST,
+            model=_openai_model('followup_decision'),
             messages=[
                 {'role': 'system', 'content': render_prompt('turn_interpretation')},
                 {'role': 'user',   'content': user_content}
@@ -1352,7 +1403,7 @@ def _interpret_consent(conversation_history):
     ctx = "\n".join(lines)
     system = render_prompt('consent_interpretation')
     completion = client.chat.completions.create(
-        model=MODEL_FAST,
+        model=_openai_model('followup_decision'),
         messages=[
             {'role': 'system', 'content': system},
             {'role': 'user',   'content': ctx + "\n\nDoes the participant want to keep talking about that topic?"},
@@ -1595,7 +1646,7 @@ def next_question():
                 'last_response':          latest_exchange.get('response', ''),
                 'followup_depth_in':      followup_depth,
                 'prepared_remaining_in':  len(prepared_questions),
-                'model':                  MODEL_FAST,
+                'model':                  _openai_model('followup_decision'),
                 'biography_question':     True,
                 'biography_chars':        len(biography),
                 'turn_interpretation':    turn_interpretation,
@@ -1628,7 +1679,7 @@ def next_question():
         )
 
         completion = client.chat.completions.create(
-            model=MODEL_FAST,
+            model=_openai_model('followup_decision'),
             messages=[
                 {'role': 'system', 'content': system_prompt},
                 {'role': 'user',   'content': user_content}
@@ -1654,7 +1705,7 @@ def next_question():
 
         # Deterministic state machine. The model supplies the wording and the soft
         # "significant?" judgment; code decides WHEN follow-ups may continue so the
-        # cap never depends on the model (gpt-nano routinely miscounts depth).
+        # cap never depends on the model, which may miscount follow-up depth.
         awaiting_out = False
 
         def _move_on():
@@ -1807,7 +1858,7 @@ def next_question():
             'last_response':          last_response,
             'followup_depth_in':      followup_depth,
             'prepared_remaining_in':  len(prepared_questions),
-            'model':                  MODEL_FAST,
+            'model':                  _openai_model('followup_decision'),
             'turn_interpretation':     turn_interpretation,
             'unexplored_new_details':  unexplored_details,
             'llm_output':             llm_out,
@@ -1848,7 +1899,7 @@ def update_biography():
         )
 
         completion = client.chat.completions.create(
-            model=MODEL_FAST,
+            model=_openai_model('followup_decision'),
             messages=[
                 {'role': 'system', 'content': system_prompt},
                 {'role': 'user',   'content': user_content}
@@ -1871,7 +1922,7 @@ def update_biography():
         print(f"Biography update error: {e}")
         return jsonify({'error': str(e)}), 500
 
-# ─── Biography portrait (gpt-image streams a Ghibli-style scene) ─────────────
+# ─── Biography portrait (the Images API streams a Ghibli-style scene) ────────
 # Config + style instructions live in portrait_generation.md at the repo root.
 # Strategy: a locked base.png keeps the person consistent; each session only the
 # surrounding scene is regenerated, anchored to base.png + any reference photos.
@@ -1881,12 +1932,10 @@ PORTRAIT_JOBS = {}
 PORTRAIT_LOCK = threading.Lock()
 
 _PORTRAIT_DEFAULTS = {
-    'IMAGE_MODEL':    'gpt-image-1',
     'IMAGE_SIZE':     '1024x1024',
     'IMAGE_QUALITY':  'medium',
     'PARTIAL_IMAGES': 2,
     'INPUT_FIDELITY': 'high',
-    'BRIEF_MODEL':    'gpt-4o',
 }
 
 
@@ -2081,6 +2130,9 @@ def _generate_portrait_job(user_id):
             return
 
         instructions, cfg = _load_portrait_config()
+        models = _load_openai_models()
+        cfg['IMAGE_MODEL'] = models['portrait_image']
+        cfg['BRIEF_MODEL'] = models['portrait_brief']
         images_dir = _images_dir(user_id)
         p = _portrait_paths(user_id)
         os.makedirs(images_dir, exist_ok=True)
@@ -2236,8 +2288,9 @@ def realtime_sdp():
         if not sdp_offer:
             return jsonify({'error': 'No SDP offer provided'}), 400
 
+        realtime_model = urllib.parse.quote(_openai_model('realtime'), safe='')
         req = urllib.request.Request(
-            'https://api.openai.com/v1/realtime/calls?model=gpt-realtime-2',
+            f'https://api.openai.com/v1/realtime/calls?model={realtime_model}',
             data=sdp_offer.encode('utf-8'),
             headers={
                 'Authorization': f'Bearer {api_key}',
@@ -2279,12 +2332,16 @@ def text_to_speech():
             turn_label = f"turn_{int(turn_number):03d}_agent"
         except (TypeError, ValueError):
             turn_label = "turn_unknown_agent"
-        text_hash      = hashlib.md5(text.encode('utf-8')).hexdigest()
+        tts_model      = _openai_model('text_to_speech')
+        cache_identity = f'{tts_model}\0alloy\0{text}'
+        text_hash      = hashlib.md5(cache_identity.encode('utf-8')).hexdigest()
         cache_filename = f"{turn_label}_tts_{text_hash}.mp3"
         cache_path     = os.path.join(audio_dir, cache_filename)
 
         if not os.path.exists(cache_path):
-            response = client.audio.speech.create(model="tts-1", voice="alloy", input=text)
+            response = client.audio.speech.create(
+                model=tts_model, voice="alloy", input=text
+            )
             with open(cache_path, "wb") as f:
                 f.write(response.content)
 
@@ -2682,7 +2739,9 @@ def _transcribe_audio_upload(audio_file):
 
     try:
         with open(tmp_path, 'rb') as f:
-            result = client.audio.transcriptions.create(model='whisper-1', file=f)
+            result = client.audio.transcriptions.create(
+                model=_openai_model('audio_transcription'), file=f
+            )
         return result.text.strip()
     finally:
         os.remove(tmp_path)

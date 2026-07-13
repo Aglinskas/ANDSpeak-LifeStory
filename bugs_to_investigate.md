@@ -60,7 +60,7 @@ References: `server.py:675`, `server.py:1630`, [OpenAI Structured Outputs](https
 
 ### 10. Medium: Realtime is configured as a general assistant instead of transcription-only
 
-The app opens `gpt-realtime-2`, sets `type: "realtime"`, and adds `whisper-1` transcription. The current API offers `type: "transcription"` with `gpt-realtime-whisper`, specifically intended for streaming speech-to-text without assistant responses. This should be evaluated for latency, cost, and simpler behavior.
+The app opens the model selected by `realtime` in `openai_models_used.json`, sets `type: "realtime"`, and adds the model selected by `realtime_transcription`. A transcription-specific Realtime session should be evaluated for latency, cost, and simpler behavior.
 
 References: `server.py:2240`, `static/app.js:1298`, [OpenAI Realtime transcription](https://developers.openai.com/api/docs/guides/realtime-transcription)
 
@@ -78,7 +78,7 @@ References: `server.py:416`
 
 ### 13. Medium: The configured image model is deprecated
 
-`portrait_generation.md` selects `gpt-image-1.5`, which the current model catalog marks deprecated. GPT Image 2 should be tested before migration, particularly for reference-image fidelity and cost.
+The `portrait_image` selection in `openai_models_used.json` should be checked against the current model catalog before deployment. Any migration should be tested for reference-image fidelity and cost.
 
 References: `portrait_generation.md:9`, [OpenAI model catalog](https://developers.openai.com/api/docs/models/all)
 

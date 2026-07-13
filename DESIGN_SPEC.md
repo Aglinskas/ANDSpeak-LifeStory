@@ -93,7 +93,7 @@ Generated questions are returned as a JSON array and stored in the frontend as `
 
 ### 4.3 Text-to-speech (TTS)
 
-Each chatbot question is spoken aloud using OpenAI's TTS API (`tts-1`, voice: `alloy`). The audio is cached server-side by MD5 hash of the text so repeated questions don't re-call the API.
+Each chatbot question is spoken aloud using OpenAI's TTS API (the `text_to_speech` model in `openai_models_used.json`, voice: `alloy`). The audio is cached server-side by model, voice, and an MD5 hash of the text so repeated questions don't re-call the API.
 
 During TTS playback, the transcript textarea is disabled and the waveform dims — the patient cannot proceed until the question has been read.
 
@@ -101,11 +101,11 @@ During TTS playback, the transcript textarea is disabled and the waveform dims �
 
 **Target implementation:** OpenAI Realtime API via WebRTC.
 
-The browser creates an `RTCPeerConnection`, adds the microphone audio track, and creates an `oai-events` data channel. The SDP offer is sent to our Flask server's `/api/realtime-sdp` endpoint, which proxies it to OpenAI's `/v1/realtime/calls?model=gpt-realtime-2` endpoint using the server-side API key. The SDP answer is returned to the browser to complete the WebRTC handshake.
+The browser creates an `RTCPeerConnection`, adds the microphone audio track, and creates an `oai-events` data channel. The SDP offer is sent to our Flask server's `/api/realtime-sdp` endpoint, which proxies it to OpenAI's `/v1/realtime/calls` endpoint using the `realtime` model in `openai_models_used.json` and the server-side API key. The SDP answer is returned to the browser to complete the WebRTC handshake.
 
 After connection, we send a `session.update` event configuring:
 - `type: "realtime"` (required field)
-- `input_audio_transcription: { model: "whisper-1" }` — enables transcription of user audio
+- `input_audio_transcription` uses the `realtime_transcription` model in `openai_models_used.json`
 - `turn_detection: { type: "server_vad" }` — OpenAI detects speech automatically
 
 Expected transcription events:
@@ -165,7 +165,7 @@ The session counter in `stats.json` is also incremented here.
 | Audio recording | Web MediaRecorder API |
 | Audio visualization | Web Audio API (AnalyserNode + Canvas) |
 | Transcription | OpenAI Realtime API (WebRTC) |
-| TTS | OpenAI TTS API (`tts-1`) |
+| TTS | OpenAI TTS API (model configured in `openai_models_used.json`) |
 | LLM (questions + bio) | OpenAI GPT-5-nano |
 | Audio conversion | FFmpeg (server-side) |
 | Data storage | Local filesystem |

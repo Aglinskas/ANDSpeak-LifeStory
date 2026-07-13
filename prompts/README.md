@@ -18,11 +18,11 @@ Change a file, save, and it takes effect on the **next turn — no restart neede
 
 | File | When it runs | Model |
 |------|--------------|-------|
-| `session_plan.md`           | start of each session — greeting + question pool | QUESTION_PREPARATION_MODEL |
-| `turn_interpretation.md`     | early each turn — answer vs topic decline vs topic change vs biography question | FOLLOWUP_DECISION_MODEL |
-| `followup_decision.md`      | every turn — follow-up vs move-on, significance, memory acknowledgment | FOLLOWUP_DECISION_MODEL |
-| `consent_interpretation.md` | after a "keep talking or move on?" checkpoint — reads the yes/no | FOLLOWUP_DECISION_MODEL |
-| `biography_update.md`       | end of each session — rewrites the biography | FOLLOWUP_DECISION_MODEL |
+| `session_plan.md`           | start of each session — greeting + question pool | `question_preparation` |
+| `turn_interpretation.md`     | early each turn — answer vs topic decline vs topic change vs biography question | `followup_decision` |
+| `followup_decision.md`      | every turn — follow-up vs move-on, significance, memory acknowledgment | `followup_decision` |
+| `consent_interpretation.md` | after a "keep talking or move on?" checkpoint — reads the yes/no | `followup_decision` |
+| `biography_update.md`       | end of each session — rewrites the biography | `followup_decision` |
 
 `session_plan.md` returns structured question objects (`text`, `topic`, `mode`,
 `keywords`, `source`, `fills_gap`, `sensitivity`). The server still accepts old
@@ -33,17 +33,21 @@ places, professions, hobbies, pets, schools, jobs, and cities in `keywords`.
 ## The image prompts (in `../portrait_generation.md`)
 
 All portrait/image text lives in one file at the repo root, `portrait_generation.md`,
-because it also holds the image settings and shared art style:
+because it also holds the non-model image settings and shared art style:
 
-- `## Settings` — model, size, quality, etc. (`KEY = value` lines)
+- `## Settings` — size, quality, etc. (`KEY = value` lines)
 - `## Instructions` — the shared Ghibli art style (prepended to every image prompt)
 - `## Scene Brief Rules` — turns the biography into a scene description (text model)
 - `## Base Portrait` — the one-time locked portrait of the person
 - `## Scene` — the per-session scene built around them
 
-## Numbers / models (in `../session_config.md`)
+## Models (in `../openai_models_used.json`)
 
-- `QUESTION_PREPARATION_MODEL`, `FOLLOWUP_DECISION_MODEL` — which OpenAI models
+- Every OpenAI model role is required and configured in this single JSON file.
+- There are no model fallbacks in the application code.
+
+## Numbers (in `../session_config.md`)
+
 - `MAX_TURNS` — hard cap on turns per session
 - `MAX_FOLLOWUP_DEPTH` — default follow-ups before moving on (consent can extend)
 

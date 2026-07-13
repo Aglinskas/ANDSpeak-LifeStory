@@ -2,7 +2,7 @@
 
 WHAT: Runs once at the start of each session. Generates the opening greeting and
 the pool of 8–10 biographical questions for the whole session.
-MODEL: QUESTION_PREPARATION_MODEL (set in session_config.md)
+MODEL ROLE: `question_preparation` (set in `openai_models_used.json`)
 ALSO SEES: agent_personality.md and the whole of session_config.md (topic areas,
 opening-question guidance, etc.) are prepended automatically — edit those for the
 bulk of the behavior. This file is just the task framing + output format.

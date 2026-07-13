@@ -70,6 +70,7 @@ const state = {
     // WebRTC Realtime transcription
     peerConnection: null,
     dataChannel:    null,
+    realtimeTranscriptionModel: null,
 
     // Personality recording
     personalityRecorder: null,
@@ -995,6 +996,10 @@ async function startSession() {
         const planData = await planRes.json();
         if (planData.error) throw new Error(planData.error);
         if (planData.session_id) state.sessionId = planData.session_id;
+        if (!planData.realtime_transcription_model) {
+            throw new Error('The realtime transcription model is not configured.');
+        }
+        state.realtimeTranscriptionModel = planData.realtime_transcription_model;
 
         state.preparedQuestionsPool = planData.questions || [];
         const greeting = planData.greeting || 'Hello! How are you doing today?';
@@ -1301,7 +1306,7 @@ async function setupRealtimeTranscription() {
                 audio: {
                     input: {
                         transcription: {
-                            model: "whisper-1"
+                            model: state.realtimeTranscriptionModel
                         },
                         turn_detection: {
                             type:                "server_vad",
