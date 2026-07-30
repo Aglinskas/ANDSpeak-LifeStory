@@ -1,10 +1,9 @@
 {
-  "question_preparation": "gpt-5.5-2026-04-23",
-  "followup_decision": "gpt-5.4-nano-2026-03-17",
-  "portrait_brief": "gpt-5.5-2026-04-23",
+  "question_preparation": "gpt-5.6-terra",
+  "followup_decision": "gpt-5.6-luna",
+  "portrait_brief": "gpt-5.6-terra",
   "portrait_image": "gpt-image-1.5",
-  "realtime": "gpt-realtime-2",
-  "realtime_transcription": "whisper-1",
+  "realtime_transcription": "gpt-realtime-whisper",
   "audio_transcription": "whisper-1",
   "text_to_speech": "tts-1"
 }

@@ -1,0 +1,9 @@
+https://docs.cloud.google.com/speech-to-text/docs/models/chirp-3
+
+
+https://www.assemblyai.com/blog/universal-3-5-pro-realtime
+
+https://docs.speechmatics.com/speech-to-text/languages
+
+
+https://www.gladia.io

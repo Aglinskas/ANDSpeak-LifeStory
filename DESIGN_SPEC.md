@@ -101,20 +101,27 @@ During TTS playback, the transcript textarea is disabled and the waveform dims �
 
 **Target implementation:** OpenAI Realtime API via WebRTC.
 
-The browser creates an `RTCPeerConnection`, adds the microphone audio track, and creates an `oai-events` data channel. The SDP offer is sent to our Flask server's `/api/realtime-sdp` endpoint, which proxies it to OpenAI's `/v1/realtime/calls` endpoint using the `realtime` model in `openai_models_used.json` and the server-side API key. The SDP answer is returned to the browser to complete the WebRTC handshake.
+The browser creates an `RTCPeerConnection`, adds the microphone audio track, and creates an `oai-events` data channel. It requests a short-lived client secret from the Flask server's `/api/realtime-token` endpoint. The server creates a transcription-only session configured with the `realtime_transcription` model, then returns only the ephemeral secret. The browser sends its SDP offer directly to OpenAI's `/v1/realtime/calls` endpoint using that secret and receives the SDP answer to complete the WebRTC handshake. The standard API key remains server-side.
 
 After connection, we send a `session.update` event configuring:
-- `type: "realtime"` (required field)
-- `input_audio_transcription` uses the `realtime_transcription` model in `openai_models_used.json`
-- `turn_detection: { type: "server_vad" }` — OpenAI detects speech automatically
+- `type: "transcription"`
+- `audio.input.transcription.model` uses the `realtime_transcription` model in `openai_models_used.json`
+- `audio.input.transcription.delay` uses the logged-in user's choice (`low` by default)
+- optional `audio.input.transcription.language` uses the user's spoken-language hint
+- optional `include: ["item.input_audio_transcription.logprobs"]` enables the confidence indicator
+- `audio.input.turn_detection: null`; pressing Proceed commits and finalizes the patient turn
 
 Expected transcription events:
 - `conversation.item.input_audio_transcription.delta` — streams partial transcription during speech
-- `conversation.item.input_audio_transcription.completed` — final transcript when the patient pauses
+- `conversation.item.input_audio_transcription.completed` — final transcript after Proceed commits the turn
 
-**Current status:** The WebRTC connection succeeds and audio flows. The `session.update` was initially rejected due to a missing `type` field (now fixed). Transcription deltas are not yet appearing — this is the active debugging issue.
+The participant sees transcript deltas while speaking. Proceed explicitly ends the patient turn, commits the buffered audio, and waits for the completed transcript before continuing.
 
-**Fallback note:** If the Realtime API transcription proves unreliable, the codebase is structured to make it easy to switch the transcription approach. The `handleRealtimeEvent()` function in `app.js` is the single integration point — swapping it for a different transcription source (e.g. Web Speech API, or the older VAD+Whisper batch approach that was working) requires only changes to that function and `setupRealtimeTranscription()`.
+Each user can maintain a personal correction dictionary in Settings. Corrections are applied locally to both
+streaming and completed transcript text because `gpt-realtime-whisper` does not support prompt-based custom
+vocabulary in GA Realtime sessions. A direct manual replacement in the response box (for example,
+`Parris` → `Paris`) is learned automatically after a short typing pause. Additions, deletions, and broad rewrites
+remain edits to that response and are deliberately not learned as global replacement rules.
 
 ### 4.5 Audio waveform visualizer
 
@@ -183,6 +190,8 @@ ANDSpeak-PatientApp-V2/
 │   └── <username>/
 │       ├── biography.txt      # Living biography file, updated each session
 │       ├── stats.json         # { "session_count": N }
+│       ├── settings.json      # Per-user transcription and interface settings
+│       ├── transcription_dictionary.json # Per-user heard → preferred corrections
 │       ├── agent_messages_audio/ # Cached TTS MP3 files
 │       └── output/            # Saved session MP3/CSV files
 └── DESIGN_SPEC.md             # This document
@@ -197,13 +206,15 @@ Flask server running on `http://127.0.0.1:5001`. All routes:
 | `/` | GET | Serves `index.html` |
 | `/api/stats` | GET | Returns `{ session_count, biography_paragraphs }` |
 | `/api/session-plan` | POST | Reads biography → GPT-5-nano → returns question list |
-| `/api/realtime-sdp` | POST | Proxies WebRTC SDP offer to OpenAI with API key; returns SDP answer |
+| `/api/realtime-token` | POST | Creates a short-lived client secret for a transcription-only WebRTC session |
+| `/api/settings` | GET/POST | Loads and saves settings for the logged-in user |
+| `/api/transcription-dictionary` | GET/POST | Loads and saves the logged-in user's correction dictionary |
 | `/api/tts` | POST | Generates/returns cached TTS audio URL |
 | `/api/update-biography` | POST | GPT-5-nano updates biography; increments session count |
 | `/api/save_session` | POST | Receives audio blob + transcript JSON; saves MP3 + CSV |
 | `/api/agent-messages-audio/<filename>` | GET | Serves cached TTS files for the logged-in user |
 
-The API key is loaded from the `OPENAI_API_KEY` environment variable at startup. All OpenAI calls use this key server-side — it is never exposed to the browser. The `/api/realtime-sdp` proxy route exists specifically to keep the key server-side for the WebRTC handshake.
+The API key is loaded from the `OPENAI_API_KEY` environment variable at startup and is never exposed to the browser. The `/api/realtime-token` route uses it to create a short-lived, transcription-only client secret. The browser may use that ephemeral secret to establish its WebRTC connection directly with OpenAI.
 
 Helper functions `read_biography()`, `read_stats()`, `write_stats()` centralize file I/O for the subject data folder. `USER_ID` and `SUBJECT_DIR` are constants at the top of the file — easy to change when multi-user support is added.
 
@@ -225,12 +236,12 @@ Key functions and their responsibilities:
 - `handleProceed()` — saves patient response, increments word count, advances to next question or calls `finishSession()`
 
 **Transcription:**
-- `setupRealtimeTranscription()` — creates RTCPeerConnection, data channel, proxies SDP
-- `handleRealtimeEvent(event)` — routes incoming Realtime API events; delta events append to `state.pendingDelta`, completed events finalize a VAD segment into `state.liveTranscriptText`
+- `setupRealtimeTranscription()` — creates the RTCPeerConnection and data channel, fetches an ephemeral transcription token, and sends the SDP offer directly to OpenAI
+- `handleRealtimeEvent(event)` — routes incoming Realtime API events; delta events update `state.pendingDelta`, and the completion event finalizes the committed patient turn into `state.liveTranscriptText`
 - `refreshTranscriptUI()` — updates textarea with `liveTranscriptText + pendingDelta`; updates word counter; checks 500-word threshold
 
 **Transcript accumulation design:**
-The transcript for the current question accumulates across multiple VAD silence-detected segments. `state.liveTranscriptText` holds finalized segments; `state.pendingDelta` holds the in-flight streaming delta. Both are cleared when the patient clicks Proceed. This means a patient can pause mid-answer (triggering a VAD completion) and keep speaking — all text accumulates naturally in the textarea.
+The transcript for the current question streams into the textarea while the participant speaks. `state.pendingDelta` holds the in-flight text. When the participant presses Proceed, the app commits the audio buffer, waits for the completed transcript, and stores it in `state.liveTranscriptText` before requesting the next question.
 
 **Audio:**
 - `setupVisualizer()` — connects mic stream to AnalyserNode; starts `drawVisualizer()` loop
@@ -342,7 +353,7 @@ python3 server.py
 Open `http://127.0.0.1:5001` in Chrome (Chrome is required for WebRTC and MediaRecorder support).
 
 ### Subject data
-The app currently uses a hardcoded user `Aidas`. Subject data lives in `subject_data/Aidas/`. To reset a user's biography, delete or clear `biography.txt`. To reset session count, delete or edit `stats.json`.
+Subject data lives in `subject_data/<username>/` for the logged-in user. To reset a user's biography, delete or clear `biography.txt`. To reset session count, delete or edit `stats.json`.
 
 ---
 
@@ -350,7 +361,7 @@ The app currently uses a hardcoded user `Aidas`. Subject data lives in `subject_
 
 | Issue | Status | Notes |
 |---|---|---|
-| Realtime API transcription not producing transcript deltas | In progress | WebRTC connection and audio flow work; `session.update` accepted; `input_audio_transcription.delta` events not firing. May need to use transcription session type or switch approaches. |
+| Realtime Whisper microphone acceptance test | In progress | The transcription session and delta handlers are implemented; verify live speech, confidence events, and manual correction learning with representative microphones before merging the experiment branch. |
 | Multiple users | Implemented | User folders live under `subject_data/<username>/` |
 | Authentication | Implemented | First screen is the login screen |
 | No partial save | By design (MVP) | Session lost if browser closes |

@@ -21,6 +21,9 @@ Key Features
   - Voice-led life-story interviews: AI asks personalized biographical questions using text-to-speech.
   - Adaptive conversation: Follow-up questions respond to new people, pets, events, and meaningful details
     while respecting declined topics.
+  - Answer correction: The newest participant message can be edited or retaken. Editing updates the saved
+    transcript and regenerates the agent's reply; retaking removes the answer and reply and reopens the
+    original question for recording.
 
   - Real-time transcription: Spoken answers appear live using OpenAI Realtime API over WebRTC.
   - Session recording: Saves complete audio as MP3 and timestamped dialogue as CSV for downstream research.
@@ -34,7 +37,8 @@ Key Features
 
   - Multi-user accounts: Provides login, user creation, password management, and isolated participant data.
   - Personalization: Users can record instructions for the interviewer’s personality and their visual likeness.
-  - Recovery and configuration: Supports partial session saves and adjustable transcription/VAD settings.
+  - Recovery and configuration: Supports partial session saves, per-user realtime transcription preferences,
+    confidence diagnostics, and personal word dictionaries.
 
   Key Implementation Details
 
@@ -54,7 +58,14 @@ Key Features
     reference photos and user-provided likeness instructions.
 
   - Storage: Data is filesystem-based under subject_data/<username>/, including biographies, settings,
-    statistics, recordings, transcripts, debug logs, and generated images.
+    personal transcription dictionaries, statistics, recordings, transcripts, debug logs, and generated images.
+
+  - Beta bug reporting: Signed-in testers can use the `Report bug` button at the top of the app. The app
+    captures the current screen before opening the report form, accepts a typed or spoken description, and
+    saves a debugging bundle under `bug reports/<date_time>_<username>/`. Each bundle contains the screenshot,
+    complete conversation state, original and remaining prepared questions, browser and session diagnostics,
+    and available text-based server logs for the active session. This folder is ignored by Git because reports
+    can contain private participant information.
 
   - Editable configuration: Prompts, model choices, conversation limits, personality, and image-generation
     rules live in Markdown configuration files and are reloaded without restarting the app.
@@ -100,6 +111,9 @@ If `ANDSPEAK_SECRET_KEY` is not set, the app generates one at startup, which mea
 All OpenAI model names are configured in `openai_models_used.json`. Edit that file to change
 the model used for any role. The app does not contain fallback model names: if this file is
 missing, malformed, or incomplete, the affected operation fails with a configuration error.
+For live speech, the server mints a short-lived client secret for a transcription-only session,
+and the browser uses it to connect directly to OpenAI over WebRTC. The `realtime_transcription`
+model streams partial and completed transcript events; the standard API key stays server-side.
 
 ## Running locally
 
@@ -127,6 +141,11 @@ subject_data/<username>/
 ```
 
 Session recordings and CSV transcripts are stored in `subject_data/<username>/output/`. Generated agent-message audio is cached in `subject_data/<username>/agent_messages_audio/`.
+
+Live-transcription choices are saved in `subject_data/<username>/settings.json`. Personal word corrections are
+saved separately in `subject_data/<username>/transcription_dictionary.json`. Correcting a transcribed word in
+the conversation response box automatically teaches that replacement to the logged-in user's dictionary;
+larger rewrites are kept for the current response but are not learned as global rules.
 
 The built-in users are `Aidas`, `Dani`, `Ben`, and `Luca`. Passwords are stored as hashes in `subject_data/users.json`, not as plaintext in the app code.
 

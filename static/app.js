@@ -5,6 +5,7 @@ const state = {
     createUserGatePassword: '',
 
     // Dynamic conversation
+    preparedQuestionsOriginal: [], // complete pool created at session start
     preparedQuestionsPool: [],   // remaining prepared questions (shrinks as used)
     conversationHistory:   [],   // [{question, response}] sent to /api/next-question
     followupDepth:         0,    // consecutive follow-ups on current topic
@@ -14,19 +15,22 @@ const state = {
     lastQuestion:          '',   // the question just asked (for pairing with response)
     lastQuestionMeta:      {},   // topic/mode/keywords for the question just asked
     turnNumber:            0,    // increments each time the chatbot speaks
+    conversationRevision:  0,    // invalidates stale next-question/TTS work after corrections
+    answerRevisionInProgress: false,
+    answerEditActive:      false,
 
     // Partial save (crash recovery)
     sessionId: '',               // timestamp string, used to name partial files
 
     // User settings (loaded from server, persisted across sessions)
     settings: {
-        vad_threshold: 0.65,
-        silence_duration_ms: 1000,
-        mute_mic_during_tts: true,
-        ignore_transcripts_during_tts: true,
+        transcription_delay: 'low',
+        transcription_language: '',
+        transcription_logprobs: false,
         filter_hallucinated_fillers: true,
         debug_realtime_events: false,
     },
+    customDictionary: [],
 
     sessionStartTime: null,
     sessionStartPerf: null,
@@ -41,11 +45,19 @@ const state = {
     totalWordCount:         0,
 
     // Live transcript accumulation
-    liveTranscriptText: '',  // finalized VAD segments
+    liveTranscriptText: '',  // finalized transcription segments
     pendingDelta:       '',  // in-flight delta
     acceptingPatientSpeech: false,
     realtimeItems: {},
     activeRealtimeItemAccepting: false,
+    awaitingCommittedTranscript: false,
+    pendingTranscriptionCommit: null,
+    lastRenderedTranscript: '',
+    transcriptEditBaseline: null,
+    transcriptEditLatest: null,
+    manualTranscriptOverride: null,
+    manualTranscriptAutoSnapshot: '',
+    transcriptionConfidence: null,
     currentPatientTurnStartSeconds: null,
     currentPatientSpeechStartSeconds: null,
     currentPatientSpeechEndSeconds: null,
@@ -88,12 +100,37 @@ const state = {
         about: '',
         likeness: '',
     },
+
+    // Beta bug reporting
+    bugReportScreenshotBlob: null,
+    bugReportContext: null,
+    bugReportPreviewUrl: '',
+    bugReportRecorder: null,
+    bugReportStream: null,
+    bugReportChunks: [],
+    bugReportMime: '',
+    bugReportDiscardRecording: false,
+    bugReportWasAcceptingSpeech: false,
+    bugReportTtsWasPlaying: false,
 };
 
 // ─── Elements ─────────────────────────────────────────────────────────────────
 
 const el = {
     statusTime:        document.getElementById('status-time'),
+    betaToolbar:       document.getElementById('beta-toolbar'),
+    btnReportBug:      document.getElementById('btn-report-bug'),
+    bugReportModal:    document.getElementById('bug-report-modal'),
+    btnCloseBugReport: document.getElementById('btn-close-bug-report'),
+    btnCancelBugReport:document.getElementById('btn-cancel-bug-report'),
+    btnSubmitBugReport:document.getElementById('btn-submit-bug-report'),
+    bugDescription:    document.getElementById('bug-description'),
+    bugScreenshotPreview: document.getElementById('bug-screenshot-preview'),
+    bugScreenshotStatus: document.getElementById('bug-screenshot-status'),
+    btnRecordBugDescription: document.getElementById('btn-record-bug-description'),
+    btnStopBugDescription: document.getElementById('btn-stop-bug-description'),
+    bugVoiceStatus:    document.getElementById('bug-voice-status'),
+    bugReportStatus:   document.getElementById('bug-report-status'),
     // Auth
     loginForm:         document.getElementById('login-form'),
     loginUsername:     document.getElementById('login-username'),
@@ -140,10 +177,14 @@ const el = {
     // Settings
     btnSettingsBack:   document.getElementById('btn-settings-back'),
     btnSettingsDone:   document.getElementById('btn-settings-done'),
-    sliderThreshold:   document.getElementById('slider-threshold'),
-    sliderSilence:     document.getElementById('slider-silence'),
-    valThreshold:      document.getElementById('val-threshold'),
-    valSilence:        document.getElementById('val-silence'),
+    transcriptionDelay: document.getElementById('transcription-delay'),
+    transcriptionLanguage: document.getElementById('transcription-language'),
+    transcriptionLogprobs: document.getElementById('transcription-logprobs'),
+    dictionaryForm:    document.getElementById('dictionary-form'),
+    dictionaryHeard:   document.getElementById('dictionary-heard'),
+    dictionaryPreferred: document.getElementById('dictionary-preferred'),
+    dictionaryList:    document.getElementById('dictionary-list'),
+    dictionaryStatus:  document.getElementById('dictionary-status'),
     saveStatus:        document.getElementById('save-status'),
     settingsCurrentUser: document.getElementById('settings-current-user'),
     btnShowChangePassword: document.getElementById('btn-show-change-password'),
@@ -187,6 +228,8 @@ const el = {
     visualizerCanvas:  document.getElementById('visualizer-canvas'),
     visualizerStatus:  document.getElementById('visualizer-status'),
     liveTranscript:    document.getElementById('live-transcript'),
+    transcriptLearningStatus: document.getElementById('transcript-learning-status'),
+    transcriptConfidence: document.getElementById('transcript-confidence'),
     transcriptLoading: document.getElementById('transcript-loading'),
     btnProceed:        document.getElementById('btn-proceed'),
     btnEndSession:        document.getElementById('btn-end-session'),
@@ -194,17 +237,12 @@ const el = {
     btnChatSettings:      document.getElementById('btn-chat-settings'),
     sessionDrawer:        document.getElementById('session-drawer'),
     btnDrawerClose:       document.getElementById('btn-drawer-close'),
-    drawerSliderThreshold: document.getElementById('drawer-slider-threshold'),
-    drawerSliderSilence:   document.getElementById('drawer-slider-silence'),
-    drawerValThreshold:    document.getElementById('drawer-val-threshold'),
-    drawerValSilence:      document.getElementById('drawer-val-silence'),
-    drawerAdvMuteMic:      document.getElementById('drawer-adv-mute-mic'),
-    drawerAdvIgnoreTts:    document.getElementById('drawer-adv-ignore-tts'),
+    drawerTranscriptionDelay: document.getElementById('drawer-transcription-delay'),
+    drawerTranscriptionLanguage: document.getElementById('drawer-transcription-language'),
+    drawerTranscriptionLogprobs: document.getElementById('drawer-transcription-logprobs'),
     drawerAdvFilterFillers:document.getElementById('drawer-adv-filter-fillers'),
     drawerAdvDebug:        document.getElementById('drawer-adv-debug'),
     drawerStatus:          document.getElementById('drawer-status'),
-    advMuteMic:            document.getElementById('adv-mute-mic'),
-    advIgnoreTts:          document.getElementById('adv-ignore-tts'),
     advFilterFillers:      document.getElementById('adv-filter-fillers'),
     advDebug:              document.getElementById('adv-debug'),
     ttsAudio:          document.getElementById('tts-audio'),
@@ -272,10 +310,24 @@ document.addEventListener('DOMContentLoaded', () => {
     el.changePasswordForm.addEventListener('submit', handleChangePassword);
     el.btnLogout.addEventListener('click', handleLogout);
 
+    el.btnReportBug.addEventListener('click', openBugReport);
+    el.btnCloseBugReport.addEventListener('click', () => closeBugReport());
+    el.btnCancelBugReport.addEventListener('click', () => closeBugReport());
+    el.btnSubmitBugReport.addEventListener('click', submitBugReport);
+    el.btnRecordBugDescription.addEventListener('click', startBugDescriptionRecording);
+    el.btnStopBugDescription.addEventListener('click', stopBugDescriptionRecording);
+    el.bugDescription.addEventListener('input', updateBugReportSubmitState);
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && !el.bugReportModal.classList.contains('hidden')) {
+            closeBugReport();
+        }
+    });
+
     el.btnStart.addEventListener('click', startSession);
     el.btnProceed.addEventListener('click', handleProceed);
     el.btnEndSession.addEventListener('click', () => wrapUpSession());
     el.btnHome.addEventListener('click', goHome);
+    el.chatMessages.addEventListener('click', handleConversationBubbleAction);
 
     // Tappable stat cards
     el.statCardSessions.addEventListener('click', showSessions);
@@ -296,34 +348,17 @@ document.addEventListener('DOMContentLoaded', () => {
     el.btnChatSettings.addEventListener('click', openSessionDrawer);
     el.btnDrawerClose.addEventListener('click', closeSessionDrawer);
 
-    el.drawerSliderThreshold.addEventListener('input', () => {
-        const val = parseInt(el.drawerSliderThreshold.value) / 100;
-        state.settings.vad_threshold        = val;
-        el.drawerValThreshold.textContent   = val.toFixed(2);
-        el.valThreshold.textContent         = val.toFixed(2);
-        el.sliderThreshold.value            = el.drawerSliderThreshold.value;
-        pushLiveVadUpdate();
-        scheduleSettingsSave();
-    });
-
-    el.drawerSliderSilence.addEventListener('input', () => {
-        const val = parseInt(el.drawerSliderSilence.value);
-        state.settings.silence_duration_ms  = val;
-        el.drawerValSilence.textContent     = (val / 1000).toFixed(1) + ' sec';
-        el.valSilence.textContent           = (val / 1000).toFixed(1) + ' sec';
-        el.sliderSilence.value              = val;
-        pushLiveVadUpdate();
-        scheduleSettingsSave();
-    });
-
-    bindAdvancedSetting(el.advMuteMic,       'mute_mic_during_tts');
-    bindAdvancedSetting(el.advIgnoreTts,     'ignore_transcripts_during_tts');
+    bindTranscriptionSelect(el.transcriptionDelay, el.drawerTranscriptionDelay, 'transcription_delay');
+    bindTranscriptionSelect(el.transcriptionLanguage, el.drawerTranscriptionLanguage, 'transcription_language');
+    bindAdvancedSetting(el.transcriptionLogprobs, 'transcription_logprobs');
+    bindAdvancedSetting(el.drawerTranscriptionLogprobs, 'transcription_logprobs', true);
     bindAdvancedSetting(el.advFilterFillers, 'filter_hallucinated_fillers');
     bindAdvancedSetting(el.advDebug,         'debug_realtime_events');
-    bindAdvancedSetting(el.drawerAdvMuteMic,       'mute_mic_during_tts', true);
-    bindAdvancedSetting(el.drawerAdvIgnoreTts,     'ignore_transcripts_during_tts', true);
     bindAdvancedSetting(el.drawerAdvFilterFillers, 'filter_hallucinated_fillers', true);
     bindAdvancedSetting(el.drawerAdvDebug,         'debug_realtime_events', true);
+    el.dictionaryForm.addEventListener('submit', handleDictionaryAdd);
+    el.dictionaryList.addEventListener('click', handleDictionaryListClick);
+    el.liveTranscript.addEventListener('input', handleTranscriptManualInput);
 
     // Settings panel
     el.btnSettings.addEventListener('click', () => {
@@ -334,20 +369,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     el.btnSettingsBack.addEventListener('click', () => showScreen('screen-home'));
     el.btnSettingsDone.addEventListener('click', () => showScreen('screen-home'));
-
-    el.sliderThreshold.addEventListener('input', () => {
-        const val = parseInt(el.sliderThreshold.value) / 100;
-        state.settings.vad_threshold = val;
-        el.valThreshold.textContent = val.toFixed(2);
-        scheduleSettingsSave();
-    });
-
-    el.sliderSilence.addEventListener('input', () => {
-        const val = parseInt(el.sliderSilence.value);
-        state.settings.silence_duration_ms = val;
-        el.valSilence.textContent = (val / 1000).toFixed(1) + ' sec';
-        scheduleSettingsSave();
-    });
 
     // Personality
     el.btnRecordPersonality.addEventListener('click', startPersonalityRecording);
@@ -385,6 +406,342 @@ function resizeCanvas() {
     canvasCtx.scale(window.devicePixelRatio, window.devicePixelRatio);
 }
 
+// ─── Beta bug reporting ─────────────────────────────────────────────────────
+
+function cloneForBugReport(value) {
+    try {
+        return JSON.parse(JSON.stringify(value));
+    } catch {
+        return null;
+    }
+}
+
+function buildBugReportContext() {
+    const activeScreen = document.querySelector('.screen.active')?.id || '';
+    const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    const visibleMessages = Array.from(el.chatMessages.querySelectorAll('.message-bubble')).map((node, index) => ({
+        index: index + 1,
+        speaker: node.classList.contains('patient') ? 'Patient' : 'Chatbot',
+        text: node.querySelector('.message-edit-textarea')?.value
+            ?? node.querySelector('.message-text')?.textContent
+            ?? node.textContent
+            ?? ''
+    }));
+
+    return {
+        captured_at: new Date().toISOString(),
+        session_id: state.sessionId,
+        active_screen: activeScreen,
+        prepared_questions: {
+            original: cloneForBugReport(state.preparedQuestionsOriginal) || [],
+            remaining: cloneForBugReport(state.preparedQuestionsPool) || [],
+        },
+        conversation: {
+            transcript_entries: cloneForBugReport(state.transcripts) || [],
+            conversation_history: cloneForBugReport(state.conversationHistory) || [],
+            visible_messages: visibleMessages,
+            live_response_draft: el.liveTranscript.value,
+            last_question: state.lastQuestion,
+            last_question_meta: cloneForBugReport(state.lastQuestionMeta) || {},
+        },
+        diagnostics: {
+            user: state.currentUser,
+            page_url: window.location.href,
+            page_title: document.title,
+            browser: {
+                user_agent: navigator.userAgent,
+                platform: navigator.platform,
+                language: navigator.language,
+                languages: Array.from(navigator.languages || []),
+                online: navigator.onLine,
+                cookies_enabled: navigator.cookieEnabled,
+                viewport: {
+                    width: window.innerWidth,
+                    height: window.innerHeight,
+                    device_pixel_ratio: window.devicePixelRatio,
+                },
+                screen: {
+                    width: window.screen.width,
+                    height: window.screen.height,
+                    available_width: window.screen.availWidth,
+                    available_height: window.screen.availHeight,
+                    color_depth: window.screen.colorDepth,
+                },
+                connection: connection ? {
+                    effective_type: connection.effectiveType,
+                    downlink: connection.downlink,
+                    round_trip_time: connection.rtt,
+                    save_data: connection.saveData,
+                } : null,
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                timezone_offset_minutes: new Date().getTimezoneOffset(),
+                visibility_state: document.visibilityState,
+            },
+            conversation_state: {
+                turn_number: state.turnNumber,
+                followup_depth: state.followupDepth,
+                awaiting_consent: state.awaitingConsent,
+                declined_topics: cloneForBugReport(state.declinedTopics) || [],
+                explored_new_details: cloneForBugReport(state.exploredNewDetails) || [],
+                total_word_count: state.totalWordCount,
+                session_started_at: state.sessionStartTime?.toISOString() || null,
+                session_elapsed_seconds: sessionSeconds(),
+                accepting_patient_speech: state.acceptingPatientSpeech,
+                realtime_connection_state: state.peerConnection?.connectionState || null,
+                realtime_data_channel_state: state.dataChannel?.readyState || null,
+                session_recorder_state: state.sessionRecorder?.state || null,
+                pending_transcription_commit: Boolean(state.pendingTranscriptionCommit),
+                current_transcription_confidence: state.transcriptionConfidence,
+                settings: cloneForBugReport(state.settings) || {},
+            },
+            audio_playback: {
+                paused: el.ttsAudio.paused,
+                ended: el.ttsAudio.ended,
+                current_time: el.ttsAudio.currentTime,
+                duration: Number.isFinite(el.ttsAudio.duration) ? el.ttsAudio.duration : null,
+                ready_state: el.ttsAudio.readyState,
+                source: el.ttsAudio.currentSrc || '',
+            },
+        },
+    };
+}
+
+function canvasToPngBlob(canvas) {
+    return new Promise((resolve, reject) => {
+        canvas.toBlob(blob => {
+            if (blob) resolve(blob);
+            else reject(new Error('The screenshot could not be converted to an image.'));
+        }, 'image/png');
+    });
+}
+
+async function captureBugReportScreenshot() {
+    if (typeof window.html2canvas !== 'function') {
+        throw new Error('The screenshot tool did not load.');
+    }
+    const target = document.querySelector('.iphone-frame');
+    const canvas = await window.html2canvas(target, {
+        backgroundColor: '#0e121e',
+        logging: false,
+        scale: Math.min(window.devicePixelRatio || 1, 2),
+        useCORS: true,
+    });
+    return canvasToPngBlob(canvas);
+}
+
+function pauseConversationForBugReport() {
+    state.bugReportWasAcceptingSpeech = state.acceptingPatientSpeech;
+    state.bugReportTtsWasPlaying = !el.ttsAudio.paused && !el.ttsAudio.ended;
+    if (state.sessionStartTime) setPatientSpeechActive(false);
+    if (state.bugReportTtsWasPlaying) el.ttsAudio.pause();
+}
+
+function resumeConversationAfterBugReport() {
+    const shouldResumeTts = state.bugReportTtsWasPlaying;
+    const shouldResumePatient = state.bugReportWasAcceptingSpeech;
+    state.bugReportTtsWasPlaying = false;
+    state.bugReportWasAcceptingSpeech = false;
+
+    if (shouldResumeTts && state.sessionStartTime && !state.isFinishing) {
+        el.ttsAudio.play().catch(err => console.error('Could not resume interview audio:', err));
+    }
+    if (shouldResumePatient && state.sessionStartTime && !state.isFinishing) {
+        setPatientSpeechActive(true);
+    }
+}
+
+async function openBugReport() {
+    if (!state.currentUser || !el.bugReportModal.classList.contains('hidden')) return;
+
+    el.btnReportBug.disabled = true;
+    el.btnReportBug.textContent = 'Capturing…';
+    try {
+        state.bugReportContext = buildBugReportContext();
+        state.bugReportScreenshotBlob = await captureBugReportScreenshot();
+        pauseConversationForBugReport();
+
+        if (state.bugReportPreviewUrl) URL.revokeObjectURL(state.bugReportPreviewUrl);
+        state.bugReportPreviewUrl = URL.createObjectURL(state.bugReportScreenshotBlob);
+        el.bugScreenshotPreview.src = state.bugReportPreviewUrl;
+        el.bugScreenshotStatus.textContent = 'Screenshot captured';
+        el.bugDescription.value = '';
+        el.bugVoiceStatus.textContent = '';
+        showBugReportStatus('');
+        updateBugReportSubmitState();
+        el.bugReportModal.classList.remove('hidden');
+        requestAnimationFrame(() => el.bugDescription.focus());
+    } catch (err) {
+        console.error('Bug report screenshot failed:', err);
+        alert(`Could not capture the screen for this report: ${err.message}`);
+        state.bugReportScreenshotBlob = null;
+        state.bugReportContext = null;
+    } finally {
+        el.btnReportBug.disabled = false;
+        el.btnReportBug.innerHTML = '<span class="report-bug-icon" aria-hidden="true">!</span> Report bug';
+    }
+}
+
+function closeBugReport({ resumeConversation = true } = {}) {
+    if (!el.bugReportModal) return;
+
+    if (state.bugReportRecorder && state.bugReportRecorder.state !== 'inactive') {
+        state.bugReportDiscardRecording = true;
+        state.bugReportRecorder.stop();
+    }
+    if (state.bugReportStream) {
+        state.bugReportStream.getTracks().forEach(track => track.stop());
+        state.bugReportStream = null;
+    }
+
+    el.bugReportModal.classList.add('hidden');
+    el.btnRecordBugDescription.classList.remove('hidden');
+    el.btnStopBugDescription.classList.add('hidden');
+    el.bugDescription.value = '';
+    showBugReportStatus('');
+    if (state.bugReportPreviewUrl) {
+        URL.revokeObjectURL(state.bugReportPreviewUrl);
+        state.bugReportPreviewUrl = '';
+    }
+    el.bugScreenshotPreview.removeAttribute('src');
+    state.bugReportScreenshotBlob = null;
+    state.bugReportContext = null;
+    state.bugReportChunks = [];
+    state.bugReportRecorder = null;
+    state.bugReportDiscardRecording = false;
+    el.btnSubmitBugReport.dataset.busy = 'false';
+    if (resumeConversation) resumeConversationAfterBugReport();
+}
+
+function showBugReportStatus(message, isError = false) {
+    el.bugReportStatus.textContent = message;
+    el.bugReportStatus.classList.toggle('error', isError);
+}
+
+function updateBugReportSubmitState() {
+    const recording = state.bugReportRecorder?.state === 'recording';
+    const busy = el.btnSubmitBugReport.dataset.busy === 'true';
+    el.btnSubmitBugReport.disabled = !el.bugDescription.value.trim() || recording || busy;
+}
+
+async function startBugDescriptionRecording() {
+    if (state.bugReportRecorder?.state === 'recording') return;
+    try {
+        state.bugReportDiscardRecording = false;
+        state.bugReportStream = await navigator.mediaDevices.getUserMedia({
+            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+        });
+        const mimeTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+        state.bugReportMime = mimeTypes.find(type => MediaRecorder.isTypeSupported(type)) || '';
+        state.bugReportChunks = [];
+        const options = state.bugReportMime ? { mimeType: state.bugReportMime } : undefined;
+        state.bugReportRecorder = new MediaRecorder(state.bugReportStream, options);
+        const activeRecorder = state.bugReportRecorder;
+        state.bugReportRecorder.ondataavailable = event => {
+            if (event.data && event.data.size > 0) state.bugReportChunks.push(event.data);
+        };
+        state.bugReportRecorder.onstop = async () => {
+            if (state.bugReportStream) {
+                state.bugReportStream.getTracks().forEach(track => track.stop());
+                state.bugReportStream = null;
+            }
+            el.btnRecordBugDescription.classList.remove('hidden');
+            el.btnStopBugDescription.classList.add('hidden');
+            const recorderStillBelongsToThisReport = state.bugReportRecorder === activeRecorder;
+            if (
+                !recorderStillBelongsToThisReport ||
+                state.bugReportDiscardRecording ||
+                el.bugReportModal.classList.contains('hidden')
+            ) {
+                if (!recorderStillBelongsToThisReport) return;
+                state.bugReportDiscardRecording = false;
+                state.bugReportChunks = [];
+                state.bugReportRecorder = null;
+                return;
+            }
+            await transcribeBugDescription();
+        };
+        state.bugReportRecorder.start();
+        el.btnRecordBugDescription.classList.add('hidden');
+        el.btnStopBugDescription.classList.remove('hidden');
+        el.bugVoiceStatus.textContent = 'Listening… describe what happened.';
+        updateBugReportSubmitState();
+    } catch (err) {
+        console.error('Bug description microphone failed:', err);
+        el.bugVoiceStatus.textContent = 'Microphone access was not available. You can type instead.';
+    }
+}
+
+function stopBugDescriptionRecording() {
+    if (state.bugReportRecorder && state.bugReportRecorder.state !== 'inactive') {
+        el.bugVoiceStatus.textContent = 'Transcribing…';
+        state.bugReportRecorder.stop();
+    }
+}
+
+async function transcribeBugDescription() {
+    el.btnRecordBugDescription.disabled = true;
+    try {
+        const blob = new Blob(state.bugReportChunks, {
+            type: state.bugReportMime || 'audio/webm'
+        });
+        const form = new FormData();
+        form.append('audio', blob, 'bug-description.webm');
+        const res = await fetch('/api/transcribe-bug-description', {
+            method: 'POST',
+            body: form
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) throw new Error(data.error || 'Transcription failed.');
+        const spokenText = (data.text || '').trim();
+        if (!spokenText) throw new Error('No speech was detected.');
+        const existingText = el.bugDescription.value.trim();
+        el.bugDescription.value = [existingText, spokenText].filter(Boolean).join(' ');
+        el.bugVoiceStatus.textContent = 'Description added. You can edit it before submitting.';
+    } catch (err) {
+        console.error('Bug description transcription failed:', err);
+        el.bugVoiceStatus.textContent = 'Could not transcribe that recording. Please try again or type.';
+    } finally {
+        state.bugReportChunks = [];
+        state.bugReportRecorder = null;
+        el.btnRecordBugDescription.disabled = false;
+        updateBugReportSubmitState();
+    }
+}
+
+async function submitBugReport() {
+    const description = el.bugDescription.value.trim();
+    if (!description || !state.bugReportContext) return;
+
+    el.btnSubmitBugReport.dataset.busy = 'true';
+    el.btnSubmitBugReport.textContent = 'Submitting…';
+    updateBugReportSubmitState();
+    showBugReportStatus('Saving screenshot and conversation details…');
+
+    try {
+        const context = cloneForBugReport(state.bugReportContext) || {};
+        context.client_submitted_at = new Date().toISOString();
+        const form = new FormData();
+        form.append('description', description);
+        form.append('report_context', JSON.stringify(context));
+        if (state.bugReportScreenshotBlob) {
+            form.append('screenshot', state.bugReportScreenshotBlob, 'screenshot.png');
+        }
+        const res = await fetch('/api/bug-reports', { method: 'POST', body: form });
+        const data = await res.json();
+        if (!res.ok || data.error) throw new Error(data.error || 'The report could not be saved.');
+
+        showBugReportStatus(`Saved. Thank you — report ${data.report_id} is ready for review.`);
+        setTimeout(() => closeBugReport(), 900);
+    } catch (err) {
+        console.error('Bug report submission failed:', err);
+        showBugReportStatus(`Could not save the report: ${err.message}`, true);
+        el.btnSubmitBugReport.dataset.busy = 'false';
+        updateBugReportSubmitState();
+    } finally {
+        el.btnSubmitBugReport.textContent = 'Submit bug report';
+    }
+}
+
 // ─── Authentication ──────────────────────────────────────────────────────────
 
 async function initAuth() {
@@ -403,18 +760,24 @@ async function initAuth() {
 
 function enterAuthenticatedApp(username) {
     state.currentUser = username;
+    el.betaToolbar.classList.remove('hidden');
     if (el.currentUserPill) el.currentUserPill.textContent = username;
     if (el.settingsCurrentUser) el.settingsCurrentUser.textContent = username;
     showScreen('screen-home');
     fetchSettings();
+    fetchTranscriptionDictionary();
     fetchStats();
     loadPortrait();
 }
 
 function showLoggedOut() {
+    closeBugReport({ resumeConversation: false });
     teardown();
     resetState();
     state.currentUser = '';
+    el.betaToolbar.classList.add('hidden');
+    state.customDictionary = [];
+    renderTranscriptionDictionary();
     if (el.currentUserPill) el.currentUserPill.textContent = '';
     if (el.settingsCurrentUser) el.settingsCurrentUser.textContent = '-';
     if (el.loginPassword) el.loginPassword.value = '';
@@ -871,13 +1234,25 @@ async function fetchSettings() {
 }
 
 function applySettingsToUI() {
-    el.sliderThreshold.value  = Math.round(state.settings.vad_threshold * 100);
-    el.valThreshold.textContent = state.settings.vad_threshold.toFixed(2);
-
-    el.sliderSilence.value    = state.settings.silence_duration_ms;
-    el.valSilence.textContent = (state.settings.silence_duration_ms / 1000).toFixed(1) + ' sec';
-
+    el.transcriptionDelay.value = state.settings.transcription_delay;
+    el.drawerTranscriptionDelay.value = state.settings.transcription_delay;
+    el.transcriptionLanguage.value = state.settings.transcription_language;
+    el.drawerTranscriptionLanguage.value = state.settings.transcription_language;
     syncAdvancedToggles();
+}
+
+function bindTranscriptionSelect(primary, mirror, key) {
+    [primary, mirror].forEach(input => {
+        if (!input) return;
+        input.addEventListener('change', () => {
+            state.settings[key] = input.value;
+            primary.value = input.value;
+            mirror.value = input.value;
+            scheduleSettingsSave();
+            pushLiveTranscriptionUpdate();
+            if (input === mirror) showDrawerApplied();
+        });
+    });
 }
 
 function bindAdvancedSetting(input, key, showDrawerStatus = false) {
@@ -885,20 +1260,22 @@ function bindAdvancedSetting(input, key, showDrawerStatus = false) {
     input.addEventListener('change', () => {
         state.settings[key] = input.checked;
         syncAdvancedToggles();
-        applyMicMuteForCurrentTurn();
         scheduleSettingsSave();
+        if (key === 'transcription_logprobs') {
+            state.transcriptionConfidence = null;
+            updateTranscriptionConfidenceUI();
+            pushLiveTranscriptionUpdate();
+        }
         if (showDrawerStatus) showDrawerApplied();
     });
 }
 
 function syncAdvancedToggles() {
     [
-        [el.advMuteMic,       'mute_mic_during_tts'],
-        [el.advIgnoreTts,     'ignore_transcripts_during_tts'],
+        [el.transcriptionLogprobs, 'transcription_logprobs'],
+        [el.drawerTranscriptionLogprobs, 'transcription_logprobs'],
         [el.advFilterFillers, 'filter_hallucinated_fillers'],
         [el.advDebug,         'debug_realtime_events'],
-        [el.drawerAdvMuteMic,       'mute_mic_during_tts'],
-        [el.drawerAdvIgnoreTts,     'ignore_transcripts_during_tts'],
         [el.drawerAdvFilterFillers, 'filter_hallucinated_fillers'],
         [el.drawerAdvDebug,         'debug_realtime_events'],
     ].forEach(([input, key]) => {
@@ -911,11 +1288,14 @@ function scheduleSettingsSave() {
     clearTimeout(_saveTimer);
     _saveTimer = setTimeout(async () => {
         try {
-            await fetch('/api/settings', {
+            const res = await fetch('/api/settings', {
                 method:  'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body:    JSON.stringify(state.settings)
             });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Could not save settings.');
+            if (data.settings) state.settings = { ...state.settings, ...data.settings };
             el.saveStatus.textContent = '✓  Saved';
             el.saveStatus.classList.add('visible');
             setTimeout(() => el.saveStatus.classList.remove('visible'), 2000);
@@ -926,12 +1306,108 @@ function scheduleSettingsSave() {
     }, 600);
 }
 
+async function fetchTranscriptionDictionary() {
+    try {
+        const res = await fetch('/api/transcription-dictionary');
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Could not load dictionary.');
+        state.customDictionary = Array.isArray(data.entries) ? data.entries : [];
+    } catch (err) {
+        console.error('Dictionary load failed:', err);
+        state.customDictionary = [];
+    }
+    renderTranscriptionDictionary();
+}
+
+let _dictionarySaveQueue = Promise.resolve();
+function saveTranscriptionDictionary(statusMessage = 'Dictionary saved.') {
+    const entries = state.customDictionary.map(entry => ({ ...entry }));
+    const save = async () => {
+        try {
+            const res = await fetch('/api/transcription-dictionary', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ entries })
+            });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Could not save dictionary.');
+            renderTranscriptionDictionary();
+            showDictionaryStatus(statusMessage, false);
+            return true;
+        } catch (err) {
+            console.error('Dictionary save failed:', err);
+            showDictionaryStatus('Could not save the dictionary. Please try again.', true);
+            return false;
+        }
+    };
+    _dictionarySaveQueue = _dictionarySaveQueue.then(save, save);
+    return _dictionarySaveQueue;
+}
+
+function normalizeDictionaryPhrase(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim().replace(/^[.,!?;:]+|[.,!?;:]+$/g, '');
+}
+
+function upsertDictionaryEntry(heard, preferred) {
+    heard = normalizeDictionaryPhrase(heard);
+    preferred = normalizeDictionaryPhrase(preferred);
+    if (!heard || !preferred || heard === preferred || heard.length > 100 || preferred.length > 100) return false;
+
+    const existing = state.customDictionary.findIndex(entry => entry.heard.toLocaleLowerCase() === heard.toLocaleLowerCase());
+    const next = { heard, preferred };
+    if (existing >= 0) state.customDictionary.splice(existing, 1, next);
+    else {
+        if (state.customDictionary.length >= 200) return false;
+        state.customDictionary.push(next);
+    }
+    renderTranscriptionDictionary();
+    return true;
+}
+
+async function handleDictionaryAdd(event) {
+    event.preventDefault();
+    const heard = el.dictionaryHeard.value;
+    const preferred = el.dictionaryPreferred.value;
+    if (!upsertDictionaryEntry(heard, preferred)) {
+        showDictionaryStatus('Enter two different words or short phrases.', true);
+        return;
+    }
+    el.dictionaryForm.reset();
+    await saveTranscriptionDictionary('Correction added.');
+}
+
+async function handleDictionaryListClick(event) {
+    const button = event.target.closest('[data-dictionary-remove]');
+    if (!button) return;
+    const index = Number(button.dataset.dictionaryRemove);
+    if (!Number.isInteger(index) || index < 0 || index >= state.customDictionary.length) return;
+    state.customDictionary.splice(index, 1);
+    renderTranscriptionDictionary();
+    await saveTranscriptionDictionary('Correction removed.');
+}
+
+function renderTranscriptionDictionary() {
+    if (!el.dictionaryList) return;
+    if (!state.customDictionary.length) {
+        el.dictionaryList.innerHTML = '<div class="dictionary-empty">No corrections yet. Add one here or correct a word during a conversation.</div>';
+        return;
+    }
+    el.dictionaryList.innerHTML = state.customDictionary.map((entry, index) => `
+        <div class="dictionary-entry">
+            <span><strong>${escapeHtml(entry.heard)}</strong><span aria-hidden="true"> → </span>${escapeHtml(entry.preferred)}</span>
+            <button type="button" data-dictionary-remove="${index}" aria-label="Remove ${escapeHtml(entry.heard)} correction">Remove</button>
+        </div>
+    `).join('');
+}
+
+function showDictionaryStatus(message, isError = false) {
+    if (!el.dictionaryStatus) return;
+    el.dictionaryStatus.textContent = message;
+    el.dictionaryStatus.classList.toggle('error', isError);
+}
+
 function openSessionDrawer() {
-    // Sync sliders to current settings before showing
-    el.drawerSliderThreshold.value  = Math.round(state.settings.vad_threshold * 100);
-    el.drawerValThreshold.textContent = state.settings.vad_threshold.toFixed(2);
-    el.drawerSliderSilence.value    = state.settings.silence_duration_ms;
-    el.drawerValSilence.textContent = (state.settings.silence_duration_ms / 1000).toFixed(1) + ' sec';
+    applySettingsToUI();
     syncAdvancedToggles();
     el.drawerStatus.classList.remove('visible');
     el.sessionDrawer.classList.add('open');
@@ -941,26 +1417,9 @@ function closeSessionDrawer() {
     el.sessionDrawer.classList.remove('open');
 }
 
-function pushLiveVadUpdate() {
-    if (!state.dataChannel || state.dataChannel.readyState !== 'open') return;
-    state.dataChannel.send(JSON.stringify({
-        type: "session.update",
-        session: {
-            audio: {
-                input: {
-                    turn_detection: {
-                        type:                "server_vad",
-                        threshold:           state.settings.vad_threshold,
-                        silence_duration_ms: state.settings.silence_duration_ms,
-                        prefix_padding_ms:   300,
-                        create_response:     false
-                    }
-                }
-            }
-        }
-    }));
-    console.log(`[VAD] Live update → threshold=${state.settings.vad_threshold} silence=${state.settings.silence_duration_ms}ms`);
-    showDrawerApplied();
+function pushLiveTranscriptionUpdate() {
+    if (!state.dataChannel || state.dataChannel.readyState !== 'open' || !state.realtimeTranscriptionModel) return;
+    sendRealtimeEvent({ type: 'session.update', session: buildTranscriptionSessionConfig() });
 }
 
 function showDrawerApplied() {
@@ -1002,6 +1461,7 @@ async function startSession() {
         state.realtimeTranscriptionModel = planData.realtime_transcription_model;
 
         state.preparedQuestionsPool = planData.questions || [];
+        state.preparedQuestionsOriginal = JSON.parse(JSON.stringify(state.preparedQuestionsPool));
         const greeting = planData.greeting || 'Hello! How are you doing today?';
 
         console.log('[SESSION] Greeting:', greeting);
@@ -1011,6 +1471,9 @@ async function startSession() {
         state.audioStream = await navigator.mediaDevices.getUserMedia({
             audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
         });
+        // Keep the outgoing Realtime audio track silent until the participant's
+        // turn begins. The same track stays attached so WebRTC can start once.
+        setPatientSpeechActive(false);
 
         // 3. MediaRecorder for full-session audio
         const mimeTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
@@ -1055,25 +1518,30 @@ async function startSession() {
 // ─── Dynamic question flow ────────────────────────────────────────────────────
 
 async function askDynamicQuestion({ acknowledgment, question, action, question_meta, questionMeta }) {
+    const conversationRevision = state.conversationRevision;
     state.turnNumber++;
     state.lastQuestion = question;
     state.lastQuestionMeta = question_meta || questionMeta || {};
     setPatientSpeechActive(false);
 
-    const isWrapUp   = action === 'wrap_up';
-    const spokenText = [acknowledgment, question].filter(Boolean).join(' ')
-                       || 'Thank you so much for sharing your story today!';
+    const isWrapUp = action === 'wrap_up';
+    const wrapUpFallback = 'Thank you so much for sharing your story today!';
+    const visibleAcknowledgment = acknowledgment || (isWrapUp && !question ? wrapUpFallback : '');
+    const spokenText = [visibleAcknowledgment, question].filter(Boolean).join(' ');
+    if (!spokenText) {
+        throw new Error(`Agent turn contained no text for action: ${action || 'missing'}`);
+    }
     const turnNumber = state.turnNumber;
 
     // Show in chat: acknowledgment and question as separate bubbles when both present
-    if (acknowledgment) appendMessage(acknowledgment, 'chatbot');
+    if (visibleAcknowledgment) appendMessage(visibleAcknowledgment, 'chatbot');
     if (question)       appendMessage(question, 'chatbot');
 
     let agentStartSeconds = null;
     let agentTranscriptSaved = false;
     let agentAudioFilePath = '';
     const finalizeAgentTranscript = () => {
-        if (agentTranscriptSaved) return;
+        if (agentTranscriptSaved || conversationRevision !== state.conversationRevision) return;
         const endSeconds = sessionSeconds();
         state.transcripts.push(createTranscriptEntry({
             questionNumber: turnNumber,
@@ -1089,9 +1557,10 @@ async function askDynamicQuestion({ acknowledgment, question, action, question_m
     state.pendingAgentTranscriptFinalizer = finalizeAgentTranscript;
     let agentContinuationStarted = false;
     const continueAfterAgent = (delayMs = 0) => {
-        if (agentContinuationStarted) return;
+        if (agentContinuationStarted || conversationRevision !== state.conversationRevision) return;
         agentContinuationStarted = true;
         const next = () => {
+            if (conversationRevision !== state.conversationRevision) return;
             if (isWrapUp) finishSession();
             else enablePatientTurn();
         };
@@ -1102,7 +1571,15 @@ async function askDynamicQuestion({ acknowledgment, question, action, question_m
     // Reset patient input
     state.liveTranscriptText  = '';
     state.pendingDelta        = '';
+    state.lastRenderedTranscript = '';
+    state.transcriptEditBaseline = null;
+    state.transcriptEditLatest = null;
+    state.manualTranscriptOverride = null;
+    state.manualTranscriptAutoSnapshot = '';
+    state.transcriptionConfidence = null;
     el.liveTranscript.value   = '';
+    el.transcriptLearningStatus.textContent = '';
+    updateTranscriptionConfidenceUI();
     el.liveTranscript.disabled = true;
     el.btnProceed.disabled     = true;
     el.visualizerStatus.textContent = 'Chatbot speaking…';
@@ -1118,22 +1595,27 @@ async function askDynamicQuestion({ acknowledgment, question, action, question_m
             })
         });
         const data = await res.json();
+        if (conversationRevision !== state.conversationRevision) return;
         if (!res.ok || data.error) throw new Error(data.error || 'TTS failed');
         agentAudioFilePath = data.audio_file_path || '';
         el.ttsAudio.onplay = () => {
+            if (conversationRevision !== state.conversationRevision) return;
             if (agentStartSeconds === null) agentStartSeconds = sessionSeconds();
         };
         el.ttsAudio.onended = () => {
+            if (conversationRevision !== state.conversationRevision) return;
             finalizeAgentTranscript();
             continueAfterAgent();
         };
         el.ttsAudio.onerror = () => {
+            if (conversationRevision !== state.conversationRevision) return;
             finalizeAgentTranscript();
             continueAfterAgent(800);
         };
         el.ttsAudio.src = data.audio_url;
         await el.ttsAudio.play();
     } catch (err) {
+        if (conversationRevision !== state.conversationRevision) return;
         console.error('TTS playback failed:', err);
         finalizeAgentTranscript();
         continueAfterAgent(800);
@@ -1166,6 +1648,24 @@ function flushPartial({ includeAudio = false, useBeacon = false } = {}) {
 // ─── Proceed / next question ──────────────────────────────────────────────────
 
 async function handleProceed() {
+    if (!state.acceptingPatientSpeech || state.pendingTranscriptionCommit) return;
+
+    finalizePendingTranscriptEdit();
+
+    state.currentPatientSpeechEndSeconds = sessionSeconds();
+    el.liveTranscript.disabled      = true;
+    el.btnProceed.disabled          = true;
+    el.visualizerStatus.textContent = 'Finalizing transcription…';
+    setPatientSpeechActive(false);
+
+    try {
+        await commitRealtimeTranscription();
+    } catch (err) {
+        // Preserve any deltas already received so a transient finalization error
+        // does not discard the participant's visible transcript.
+        console.error('Realtime transcription finalization failed:', err);
+    }
+
     const response = el.liveTranscript.value.trim();
     const patientEndSeconds = response
         ? (state.currentPatientSpeechEndSeconds ?? sessionSeconds())
@@ -1173,8 +1673,6 @@ async function handleProceed() {
     const patientStartSeconds = response
         ? (state.currentPatientSpeechStartSeconds ?? state.currentPatientTurnStartSeconds ?? patientEndSeconds)
         : (state.currentPatientTurnStartSeconds ?? patientEndSeconds);
-    setPatientSpeechActive(false);
-
     appendMessage(response || '(no response)', 'patient');
     state.transcripts.push(createTranscriptEntry({
         questionNumber: state.turnNumber,
@@ -1192,8 +1690,18 @@ async function handleProceed() {
     // Record exchange for follow-up context
     state.conversationHistory.push({
         question: state.lastQuestion,
-        question_meta: state.lastQuestionMeta,
-        response
+        question_meta: cloneForBugReport(state.lastQuestionMeta) || {},
+        response,
+        answer_snapshot: {
+            prepared_questions: cloneForBugReport(state.preparedQuestionsPool) || [],
+            declined_topics: cloneForBugReport(state.declinedTopics) || [],
+            explored_new_details: cloneForBugReport(state.exploredNewDetails) || [],
+            followup_depth: state.followupDepth,
+            awaiting_consent: state.awaitingConsent,
+            question: state.lastQuestion,
+            question_meta: cloneForBugReport(state.lastQuestionMeta) || {},
+            turn_number: state.turnNumber,
+        }
     });
 
     // Partial save: transcript every turn, audio every 3 turns
@@ -1208,7 +1716,11 @@ async function handleProceed() {
         return;
     }
 
-    // Fetch next question from server
+    await requestAndAskNextQuestion();
+}
+
+async function requestAndAskNextQuestion() {
+    const conversationRevision = state.conversationRevision;
     el.liveTranscript.disabled      = true;
     el.btnProceed.disabled          = true;
     el.visualizerStatus.textContent = 'Thinking…';
@@ -1218,7 +1730,11 @@ async function handleProceed() {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
             body:    JSON.stringify({
-                conversation_history: state.conversationHistory,
+                conversation_history: state.conversationHistory.map(exchange => ({
+                    question: exchange.question,
+                    question_meta: exchange.question_meta,
+                    response: exchange.response,
+                })),
                 prepared_questions:   state.preparedQuestionsPool,
                 declined_topics:      state.declinedTopics,
                 explored_new_details: state.exploredNewDetails,
@@ -1228,6 +1744,23 @@ async function handleProceed() {
             })
         });
         const next = await res.json();
+        if (conversationRevision !== state.conversationRevision) return;
+
+        if (!res.ok || next.error) {
+            const requestSuffix = next.request_id ? ` (request ${next.request_id})` : '';
+            throw new Error(`${next.error || 'Next-question request failed'}${requestSuffix}`);
+        }
+
+        const validActions = new Set(['followup', 'checkpoint', 'next_prepared', 'answer', 'wrap_up']);
+        if (!validActions.has(next.action)) {
+            throw new Error(`Next-question response had an invalid action: ${next.action || 'missing'}`);
+        }
+        if (
+            next.action !== 'wrap_up' &&
+            ![next.acknowledgment, next.question].some(value => typeof value === 'string' && value.trim())
+        ) {
+            throw new Error('Next-question response contained no text.');
+        }
 
         console.log(`[NEXT-Q] action=${next.action} | ${next.reasoning}`);
 
@@ -1242,6 +1775,7 @@ async function handleProceed() {
         await askDynamicQuestion(next);
 
     } catch (err) {
+        if (conversationRevision !== state.conversationRevision) return;
         console.error('Next question error:', err);
         await wrapUpSession({
             closingText: "Thank you for sharing all of that with me. I look forward to chatting more next time."
@@ -1251,8 +1785,11 @@ async function handleProceed() {
 
 function enablePatientTurn() {
     state.currentPatientTurnStartSeconds = sessionSeconds();
-    state.currentPatientSpeechStartSeconds = null;
+    state.currentPatientSpeechStartSeconds = state.currentPatientTurnStartSeconds;
     state.currentPatientSpeechEndSeconds = null;
+    state.activeRealtimeItemAccepting = true;
+    state.realtimeItems = {};
+    clearRealtimeInputBuffer();
     setPatientSpeechActive(true);
     el.liveTranscript.disabled      = false;
     el.btnProceed.disabled          = false;
@@ -1267,7 +1804,9 @@ function setPatientSpeechActive(active) {
 
 function applyMicMuteForCurrentTurn() {
     if (!state.audioStream) return;
-    const shouldMute = state.settings.mute_mic_during_tts && !state.acceptingPatientSpeech;
+    // Manual transcription turns require a clean boundary. Audio is sent only
+    // while the participant turn is active and is committed on Proceed.
+    const shouldMute = !state.acceptingPatientSpeech;
     state.audioStream.getAudioTracks().forEach(track => {
         track.enabled = !shouldMute;
     });
@@ -1286,6 +1825,28 @@ function setButtonLabel(mode) {
 
 // ─── WebRTC Realtime transcription ────────────────────────────────────────────
 
+function buildTranscriptionSessionConfig() {
+    const transcription = {
+        model: state.realtimeTranscriptionModel,
+        delay: state.settings.transcription_delay || 'low'
+    };
+    if (state.settings.transcription_language) {
+        transcription.language = state.settings.transcription_language;
+    }
+    return {
+        type: 'transcription',
+        audio: {
+            input: {
+                transcription,
+                turn_detection: null
+            }
+        },
+        include: state.settings.transcription_logprobs
+            ? ['item.input_audio_transcription.logprobs']
+            : []
+    };
+}
+
 async function setupRealtimeTranscription() {
     const pc = new RTCPeerConnection();
     state.peerConnection = pc;
@@ -1295,51 +1856,72 @@ async function setupRealtimeTranscription() {
     const dc = pc.createDataChannel("oai-events");
     state.dataChannel = dc;
 
+    let sessionReadySettled = false;
+    let resolveSessionReady;
+    let rejectSessionReady;
+    const sessionReady = new Promise((resolve, reject) => {
+        resolveSessionReady = resolve;
+        rejectSessionReady = reject;
+    });
+    const readyTimeout = setTimeout(() => {
+        if (sessionReadySettled) return;
+        sessionReadySettled = true;
+        rejectSessionReady(new Error('Realtime transcription session timed out.'));
+    }, 10000);
+
     pc.ontrack = e => console.log('[RT] incoming track:', e.track.kind);
 
     dc.addEventListener("open", () => {
         console.log('[RT] data channel open');
         dc.send(JSON.stringify({
             type: "session.update",
-            session: {
-                type: "realtime",
-                audio: {
-                    input: {
-                        transcription: {
-                            model: state.realtimeTranscriptionModel
-                        },
-                        turn_detection: {
-                            type:                "server_vad",
-                            threshold:           state.settings.vad_threshold,
-                            silence_duration_ms: state.settings.silence_duration_ms,
-                            prefix_padding_ms:   300,
-                            create_response:     false
-                        }
-                    }
-                },
-                instructions: "You are a transcription assistant. Do not respond to the user."
-            }
+            session: buildTranscriptionSessionConfig()
         }));
     });
 
-    dc.addEventListener("error", e => console.error('[RT] data channel error:', e));
+    dc.addEventListener("error", e => {
+        console.error('[RT] data channel error:', e);
+        settlePendingTranscription(new Error('Realtime data channel error.'));
+        if (!sessionReadySettled) {
+            sessionReadySettled = true;
+            clearTimeout(readyTimeout);
+            rejectSessionReady(new Error('Realtime data channel error.'));
+        }
+    });
     dc.addEventListener("close",  () => console.log('[RT] data channel closed'));
 
     dc.addEventListener("message", e => {
         if (state.settings.debug_realtime_events) {
             console.log('[RT] raw:', e.data.substring(0, 300));
         }
-        try { handleRealtimeEvent(JSON.parse(e.data)); }
+        try {
+            const event = JSON.parse(e.data);
+            if (event.type === 'session.updated' && !sessionReadySettled) {
+                sessionReadySettled = true;
+                clearTimeout(readyTimeout);
+                resolveSessionReady();
+            }
+            handleRealtimeEvent(event);
+        }
         catch (err) { console.error("Realtime parse error:", err); }
     });
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
-    const sdpRes = await fetch("/api/realtime-sdp", {
-        method:  "POST",
-        body:    offer.sdp,
-        headers: { "Content-Type": "application/sdp" }
+    const tokenRes = await fetch('/api/realtime-token', { method: 'POST' });
+    const tokenData = await tokenRes.json();
+    if (!tokenRes.ok || !tokenData.value) {
+        throw new Error(tokenData.error || 'Could not create realtime transcription token.');
+    }
+
+    const sdpRes = await fetch('https://api.openai.com/v1/realtime/calls', {
+        method: 'POST',
+        body: offer.sdp,
+        headers: {
+            'Authorization': `Bearer ${tokenData.value}`,
+            'Content-Type': 'application/sdp'
+        }
     });
 
     if (!sdpRes.ok) {
@@ -1347,13 +1929,54 @@ async function setupRealtimeTranscription() {
     }
 
     await pc.setRemoteDescription({ type: "answer", sdp: await sdpRes.text() });
+    await sessionReady;
+}
+
+function sendRealtimeEvent(event) {
+    if (!state.dataChannel || state.dataChannel.readyState !== 'open') {
+        throw new Error('Realtime transcription connection is not ready.');
+    }
+    state.dataChannel.send(JSON.stringify(event));
+}
+
+function clearRealtimeInputBuffer() {
+    if (!state.dataChannel || state.dataChannel.readyState !== 'open') return;
+    sendRealtimeEvent({ type: 'input_audio_buffer.clear' });
+}
+
+function settlePendingTranscription(error = null, event = null) {
+    const pending = state.pendingTranscriptionCommit;
+    if (!pending) return;
+    state.pendingTranscriptionCommit = null;
+    state.awaitingCommittedTranscript = false;
+    clearTimeout(pending.timeoutId);
+    if (error) pending.reject(error);
+    else pending.resolve(event);
+}
+
+function commitRealtimeTranscription() {
+    state.awaitingCommittedTranscript = true;
+    return new Promise((resolve, reject) => {
+        const timeoutId = setTimeout(() => {
+            settlePendingTranscription(new Error('Timed out waiting for the final transcript.'));
+        }, 20000);
+        state.pendingTranscriptionCommit = { resolve, reject, timeoutId };
+        try {
+            sendRealtimeEvent({ type: 'input_audio_buffer.commit' });
+        } catch (err) {
+            settlePendingTranscription(err);
+        }
+    });
 }
 
 function handleRealtimeEvent(event) {
     switch (event.type) {
         case "conversation.item.input_audio_transcription.delta":
             if (!shouldAcceptRealtimeTranscript(event)) break;
-            state.pendingDelta += cleanTranscriptFragment(event.delta || "", { partial: true });
+            // Delta boundaries are arbitrary and may carry meaningful leading
+            // whitespace, so normalize only after the completed event arrives.
+            state.pendingDelta += event.delta || "";
+            updateTranscriptionConfidence(event);
             refreshTranscriptUI();
             break;
 
@@ -1370,12 +1993,13 @@ function handleRealtimeEvent(event) {
                 if (cleaned) state.liveTranscriptText += cleaned + " ";
             }
             state.pendingDelta        = "";
+            updateTranscriptionConfidence(event);
             refreshTranscriptUI();
+            settlePendingTranscription(null, event);
             break;
 
         case "input_audio_buffer.speech_started":
-            state.activeRealtimeItemAccepting =
-                state.acceptingPatientSpeech || !state.settings.ignore_transcripts_during_tts;
+            state.activeRealtimeItemAccepting = state.acceptingPatientSpeech;
             if (event.item_id) {
                 state.realtimeItems[event.item_id] = state.activeRealtimeItemAccepting;
             }
@@ -1400,6 +2024,7 @@ function handleRealtimeEvent(event) {
 
         case "error":
             console.error('[RT] API error:', event.error);
+            settlePendingTranscription(new Error(event.error?.message || 'Realtime API error.'));
             break;
 
         default:
@@ -1408,7 +2033,7 @@ function handleRealtimeEvent(event) {
 }
 
 function shouldAcceptRealtimeTranscript(event) {
-    if (!state.settings.ignore_transcripts_during_tts) return true;
+    if (state.awaitingCommittedTranscript) return true;
     if (event.item_id && Object.prototype.hasOwnProperty.call(state.realtimeItems, event.item_id)) {
         return Boolean(state.realtimeItems[event.item_id]);
     }
@@ -1432,22 +2057,163 @@ function cleanTranscriptFragment(text, { partial = false } = {}) {
     return cleaned;
 }
 
+function escapeRegExp(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function applyCustomDictionary(text) {
+    let corrected = String(text || '');
+    const entries = [...state.customDictionary].sort((a, b) => b.heard.length - a.heard.length);
+    entries.forEach(entry => {
+        const heard = normalizeDictionaryPhrase(entry.heard);
+        const preferred = normalizeDictionaryPhrase(entry.preferred);
+        if (!heard || !preferred) return;
+        const pattern = new RegExp(`(^|[^\\p{L}\\p{N}])(${escapeRegExp(heard)})(?=$|[^\\p{L}\\p{N}])`, 'giu');
+        corrected = corrected.replace(pattern, (match, prefix) => `${prefix}${preferred}`);
+    });
+    return corrected;
+}
+
+function currentAutomaticTranscript() {
+    return applyCustomDictionary((state.liveTranscriptText + state.pendingDelta).trim());
+}
+
+let _transcriptEditTimer = null;
+function handleTranscriptManualInput() {
+    if (state.transcriptEditBaseline === null) {
+        state.transcriptEditBaseline = state.lastRenderedTranscript;
+    }
+    state.transcriptEditLatest = el.liveTranscript.value;
+    // Start the live manual overlay immediately. Incoming transcription deltas
+    // can then be appended while the correction-learning timer is still active.
+    state.manualTranscriptOverride = el.liveTranscript.value;
+    state.manualTranscriptAutoSnapshot = currentAutomaticTranscript();
+    el.transcriptLearningStatus.textContent = 'Checking your correction…';
+    clearTimeout(_transcriptEditTimer);
+    _transcriptEditTimer = setTimeout(finalizePendingTranscriptEdit, 900);
+    updateTranscriptWordCount(el.liveTranscript.value);
+}
+
+function inferDictionaryCorrection(before, after) {
+    const beforeTokens = String(before || '').trim().split(/\s+/).filter(Boolean);
+    const afterTokens = String(after || '').trim().split(/\s+/).filter(Boolean);
+    let prefix = 0;
+    while (prefix < beforeTokens.length && prefix < afterTokens.length && beforeTokens[prefix] === afterTokens[prefix]) {
+        prefix++;
+    }
+    let suffix = 0;
+    while (
+        suffix < beforeTokens.length - prefix &&
+        suffix < afterTokens.length - prefix &&
+        beforeTokens[beforeTokens.length - 1 - suffix] === afterTokens[afterTokens.length - 1 - suffix]
+    ) {
+        suffix++;
+    }
+
+    const heardTokens = beforeTokens.slice(prefix, beforeTokens.length - suffix);
+    const preferredTokens = afterTokens.slice(prefix, afterTokens.length - suffix);
+    if (!heardTokens.length || !preferredTokens.length || heardTokens.length > 4 || preferredTokens.length > 4) return null;
+
+    const heard = normalizeDictionaryPhrase(heardTokens.join(' '));
+    const preferred = normalizeDictionaryPhrase(preferredTokens.join(' '));
+    if (!heard || !preferred || heard === preferred) return null;
+    return { heard, preferred };
+}
+
+function finalizePendingTranscriptEdit() {
+    clearTimeout(_transcriptEditTimer);
+    _transcriptEditTimer = null;
+    if (state.transcriptEditBaseline === null) return;
+
+    const before = state.transcriptEditBaseline;
+    const after = state.transcriptEditLatest ?? el.liveTranscript.value;
+    const correction = inferDictionaryCorrection(before, after);
+    state.transcriptEditBaseline = null;
+    state.transcriptEditLatest = null;
+
+    if (correction && upsertDictionaryEntry(correction.heard, correction.preferred)) {
+        state.manualTranscriptOverride = null;
+        state.manualTranscriptAutoSnapshot = '';
+        el.transcriptLearningStatus.textContent = `Learned: ${correction.heard} → ${correction.preferred}`;
+        saveTranscriptionDictionary(`Learned ${correction.heard} → ${correction.preferred}`).then(saved => {
+            if (!saved) el.transcriptLearningStatus.textContent = 'Correction applied, but it could not be saved.';
+        });
+    } else {
+        // Keep broader edits in this response, but do not turn additions or
+        // deletions into a global replacement rule. The live override may also
+        // contain transcript deltas received after the last keystroke, so do
+        // not replace it with the older `after` snapshot here.
+        state.manualTranscriptOverride = state.manualTranscriptOverride ?? after;
+        state.manualTranscriptAutoSnapshot = currentAutomaticTranscript();
+        el.transcriptLearningStatus.textContent = 'Edit kept for this response.';
+    }
+    refreshTranscriptUI();
+}
+
+function updateTranscriptionConfidence(event) {
+    if (!state.settings.transcription_logprobs) return;
+    const logprobs = Array.isArray(event?.logprobs) ? event.logprobs : [];
+    const values = logprobs
+        .map(item => typeof item === 'number' ? item : item?.logprob)
+        .filter(value => Number.isFinite(value));
+    if (!values.length) return;
+    const probabilities = values.map(value => Math.exp(value));
+    state.transcriptionConfidence = probabilities.reduce((sum, value) => sum + value, 0) / probabilities.length;
+    updateTranscriptionConfidenceUI();
+}
+
+function updateTranscriptionConfidenceUI() {
+    if (!el.transcriptConfidence) return;
+    if (!state.settings.transcription_logprobs || state.transcriptionConfidence === null) {
+        el.transcriptConfidence.textContent = '';
+        el.transcriptConfidence.removeAttribute('title');
+        return;
+    }
+    const value = state.transcriptionConfidence;
+    el.transcriptConfidence.textContent = value >= 0.85
+        ? 'Confidence: high'
+        : value >= 0.65 ? 'Confidence: moderate' : 'Please review uncertain wording';
+    el.transcriptConfidence.title = `Estimated confidence: ${Math.round(value * 100)}%`;
+}
+
+function updateTranscriptWordCount(text) {
+    const currentWords = text ? text.trim().split(/\s+/).filter(Boolean).length : 0;
+    const totalWords = state.prevQuestionsWordCount + currentWords;
+    state.totalWordCount = totalWords;
+    el.wordCounter.textContent = `${totalWords} words`;
+    if (totalWords >= 500 && !el.liveTranscript.disabled) setButtonLabel('finish');
+}
+
 function refreshTranscriptUI() {
-    const fullText = (state.liveTranscriptText + state.pendingDelta).trim();
+    const automaticText = currentAutomaticTranscript();
+    let fullText = automaticText;
+    const preserveSelection = document.activeElement === el.liveTranscript;
+    const selectionStart = preserveSelection ? el.liveTranscript.selectionStart : null;
+    const selectionEnd = preserveSelection ? el.liveTranscript.selectionEnd : null;
+
+    if (state.manualTranscriptOverride !== null) {
+        const suffix = automaticText.startsWith(state.manualTranscriptAutoSnapshot)
+            ? automaticText.slice(state.manualTranscriptAutoSnapshot.length)
+            : '';
+        fullText = `${state.manualTranscriptOverride}${suffix}`.trim();
+        state.manualTranscriptOverride = fullText;
+        state.manualTranscriptAutoSnapshot = automaticText;
+    }
+
     el.liveTranscript.value = fullText;
+    if (preserveSelection && selectionStart !== null && selectionEnd !== null) {
+        const maxPosition = fullText.length;
+        el.liveTranscript.setSelectionRange(
+            Math.min(selectionStart, maxPosition),
+            Math.min(selectionEnd, maxPosition)
+        );
+    }
+    state.lastRenderedTranscript = fullText;
 
     if (fullText && state.acceptingPatientSpeech && state.currentPatientSpeechStartSeconds === null) {
         state.currentPatientSpeechStartSeconds = state.currentPatientTurnStartSeconds ?? sessionSeconds();
     }
-
-    const currentWords  = fullText ? fullText.split(/\s+/).filter(Boolean).length : 0;
-    const totalWords    = state.prevQuestionsWordCount + currentWords;
-    state.totalWordCount = totalWords;
-    el.wordCounter.textContent = `${totalWords} words`;
-
-    if (totalWords >= 500 && !el.liveTranscript.disabled) {
-        setButtonLabel('finish');
-    }
+    updateTranscriptWordCount(fullText);
 }
 
 // ─── Finish session ───────────────────────────────────────────────────────────
@@ -1592,10 +2358,264 @@ function drawVisualizer() {
 
 function appendMessage(text, speaker) {
     const div = document.createElement('div');
-    div.className   = `message-bubble ${speaker}`;
-    div.textContent = text;
+    div.className = `message-bubble ${speaker}`;
+
+    const messageText = document.createElement('span');
+    messageText.className = 'message-text';
+    messageText.textContent = text;
+    div.appendChild(messageText);
+
+    if (speaker === 'patient') {
+        el.chatMessages.querySelectorAll('.message-bubble.patient .message-actions').forEach(actions => {
+            actions.classList.add('hidden');
+        });
+
+        const actions = document.createElement('span');
+        actions.className = 'message-actions';
+
+        const editButton = document.createElement('button');
+        editButton.type = 'button';
+        editButton.className = 'message-action-btn';
+        editButton.dataset.messageAction = 'edit';
+        editButton.setAttribute('aria-label', 'Edit this answer');
+        editButton.title = 'Edit answer';
+        editButton.textContent = '✎';
+
+        const retakeButton = document.createElement('button');
+        retakeButton.type = 'button';
+        retakeButton.className = 'message-action-btn';
+        retakeButton.dataset.messageAction = 'retake';
+        retakeButton.setAttribute('aria-label', 'Retake this answer');
+        retakeButton.title = 'Retake answer';
+        retakeButton.textContent = '↻';
+
+        actions.append(editButton, retakeButton);
+        div.appendChild(actions);
+    }
+
     el.chatMessages.appendChild(div);
     el.chatMessages.scrollTop = el.chatMessages.scrollHeight;
+    return div;
+}
+
+function latestPatientBubble() {
+    const bubbles = el.chatMessages.querySelectorAll('.message-bubble.patient');
+    return bubbles.length ? bubbles[bubbles.length - 1] : null;
+}
+
+function handleConversationBubbleAction(event) {
+    const button = event.target.closest('[data-message-action]');
+    if (!button) return;
+    const bubble = button.closest('.message-bubble.patient');
+    if (!bubble || bubble !== latestPatientBubble()) return;
+
+    const action = button.dataset.messageAction;
+    if (action === 'edit') beginLatestAnswerEdit(bubble);
+    if (action === 'retake') retakeLatestAnswer(bubble);
+    if (action === 'edit-save') saveLatestAnswerEdit(bubble);
+    if (action === 'edit-cancel') cancelLatestAnswerEdit(bubble);
+}
+
+function latestPatientTranscriptIndex() {
+    for (let index = state.transcripts.length - 1; index >= 0; index--) {
+        if (state.transcripts[index]?.speaker === 'Patient') return index;
+    }
+    return -1;
+}
+
+function restoreAnswerSnapshot(exchange) {
+    const snapshot = exchange?.answer_snapshot;
+    if (!snapshot) throw new Error('This answer cannot be revised because its conversation snapshot is missing.');
+    state.preparedQuestionsPool = cloneForBugReport(snapshot.prepared_questions) || [];
+    state.declinedTopics = cloneForBugReport(snapshot.declined_topics) || [];
+    state.exploredNewDetails = cloneForBugReport(snapshot.explored_new_details) || [];
+    state.followupDepth = snapshot.followup_depth || 0;
+    state.awaitingConsent = Boolean(snapshot.awaiting_consent);
+    state.lastQuestion = snapshot.question || exchange.question || '';
+    state.lastQuestionMeta = cloneForBugReport(snapshot.question_meta) || {};
+    state.turnNumber = Number(snapshot.turn_number) || state.turnNumber;
+}
+
+function prepareLatestAnswerRevision(bubble) {
+    if (
+        state.answerRevisionInProgress ||
+        state.pendingTranscriptionCommit ||
+        state.isFinishing ||
+        state.sessionSaved ||
+        bubble !== latestPatientBubble()
+    ) {
+        return null;
+    }
+
+    const exchange = state.conversationHistory[state.conversationHistory.length - 1];
+    if (!exchange) return null;
+
+    try {
+        restoreAnswerSnapshot(exchange);
+    } catch (err) {
+        console.error('Answer revision snapshot error:', err);
+        alert(err.message);
+        return null;
+    }
+
+    state.conversationRevision++;
+    setPatientSpeechActive(false);
+
+    el.ttsAudio.onplay = null;
+    el.ttsAudio.onended = null;
+    el.ttsAudio.onerror = null;
+    el.ttsAudio.pause();
+    el.ttsAudio.removeAttribute('src');
+    el.ttsAudio.load();
+    state.pendingAgentTranscriptFinalizer = null;
+
+    while (bubble.nextSibling) bubble.nextSibling.remove();
+
+    const patientTranscriptIndex = latestPatientTranscriptIndex();
+    if (patientTranscriptIndex >= 0) {
+        state.transcripts = state.transcripts.slice(0, patientTranscriptIndex + 1);
+    }
+
+    clearTimeout(_transcriptEditTimer);
+    _transcriptEditTimer = null;
+    state.liveTranscriptText = '';
+    state.pendingDelta = '';
+    state.lastRenderedTranscript = '';
+    state.transcriptEditBaseline = null;
+    state.transcriptEditLatest = null;
+    state.manualTranscriptOverride = null;
+    state.manualTranscriptAutoSnapshot = '';
+    state.transcriptionConfidence = null;
+    state.realtimeItems = {};
+    state.activeRealtimeItemAccepting = false;
+    state.awaitingCommittedTranscript = false;
+    clearRealtimeInputBuffer();
+
+    el.liveTranscript.value = '';
+    el.liveTranscript.disabled = true;
+    el.btnProceed.disabled = true;
+    el.transcriptLearningStatus.textContent = '';
+    updateTranscriptionConfidenceUI();
+    el.btnEndSession.disabled = false;
+    state.isFinishing = false;
+    return exchange;
+}
+
+function recalculateConversationWordCount() {
+    const total = state.conversationHistory.reduce((sum, exchange) => {
+        const words = String(exchange.response || '').trim().split(/\s+/).filter(Boolean).length;
+        return sum + words;
+    }, 0);
+    state.prevQuestionsWordCount = total;
+    state.totalWordCount = total;
+    el.wordCounter.textContent = `${total} words`;
+}
+
+function setPatientBubbleEditing(bubble, editing) {
+    bubble.classList.toggle('editing', editing);
+    bubble.querySelector('.message-text')?.classList.toggle('hidden', editing);
+    bubble.querySelector('.message-actions')?.classList.toggle('hidden', editing);
+    if (!editing) bubble.querySelector('.message-editor')?.remove();
+}
+
+function beginLatestAnswerEdit(bubble) {
+    if (state.answerEditActive) return;
+    const exchange = prepareLatestAnswerRevision(bubble);
+    if (!exchange) return;
+
+    state.answerEditActive = true;
+    el.btnEndSession.disabled = true;
+    setPatientBubbleEditing(bubble, true);
+
+    const editor = document.createElement('span');
+    editor.className = 'message-editor';
+    const textarea = document.createElement('textarea');
+    textarea.className = 'message-edit-textarea';
+    textarea.value = exchange.response || '';
+    textarea.setAttribute('aria-label', 'Edit answer text');
+
+    const editorActions = document.createElement('span');
+    editorActions.className = 'message-editor-actions';
+    const cancelButton = document.createElement('button');
+    cancelButton.type = 'button';
+    cancelButton.dataset.messageAction = 'edit-cancel';
+    cancelButton.textContent = 'Cancel';
+    const saveButton = document.createElement('button');
+    saveButton.type = 'button';
+    saveButton.dataset.messageAction = 'edit-save';
+    saveButton.textContent = 'OK';
+    editorActions.append(cancelButton, saveButton);
+    editor.append(textarea, editorActions);
+    bubble.appendChild(editor);
+    requestAnimationFrame(() => {
+        textarea.focus();
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    });
+}
+
+async function continueAfterAnswerRevision() {
+    state.answerRevisionInProgress = true;
+    const actionButtons = latestPatientBubble()?.querySelectorAll('.message-action-btn') || [];
+    actionButtons.forEach(button => { button.disabled = true; });
+    try {
+        if (state.totalWordCount >= 500) {
+            await wrapUpSession();
+        } else {
+            await requestAndAskNextQuestion();
+        }
+    } finally {
+        actionButtons.forEach(button => { button.disabled = false; });
+        state.answerRevisionInProgress = false;
+    }
+}
+
+async function saveLatestAnswerEdit(bubble) {
+    if (!state.answerEditActive || state.answerRevisionInProgress) return;
+    const textarea = bubble.querySelector('.message-edit-textarea');
+    if (!textarea) return;
+
+    const correctedText = textarea.value.trim();
+    const exchange = state.conversationHistory[state.conversationHistory.length - 1];
+    if (!exchange) return;
+
+    exchange.response = correctedText;
+    const patientTranscriptIndex = latestPatientTranscriptIndex();
+    if (patientTranscriptIndex >= 0) {
+        state.transcripts[patientTranscriptIndex].text = correctedText;
+    }
+    bubble.querySelector('.message-text').textContent = correctedText || '(no response)';
+    state.answerEditActive = false;
+    el.btnEndSession.disabled = false;
+    setPatientBubbleEditing(bubble, false);
+    recalculateConversationWordCount();
+    flushPartial();
+    el.visualizerStatus.textContent = 'Recalculating response…';
+    await continueAfterAnswerRevision();
+}
+
+async function cancelLatestAnswerEdit(bubble) {
+    if (!state.answerEditActive || state.answerRevisionInProgress) return;
+    state.answerEditActive = false;
+    el.btnEndSession.disabled = false;
+    setPatientBubbleEditing(bubble, false);
+    el.visualizerStatus.textContent = 'Restoring response…';
+    await continueAfterAnswerRevision();
+}
+
+function retakeLatestAnswer(bubble) {
+    if (state.answerEditActive) return;
+    const exchange = prepareLatestAnswerRevision(bubble);
+    if (!exchange) return;
+
+    state.conversationHistory.pop();
+    const patientTranscriptIndex = latestPatientTranscriptIndex();
+    if (patientTranscriptIndex >= 0) {
+        state.transcripts = state.transcripts.slice(0, patientTranscriptIndex);
+    }
+    bubble.remove();
+    recalculateConversationWordCount();
+    flushPartial();
+    enablePatientTurn();
 }
 
 function getTimestamp() {
@@ -1662,15 +2682,21 @@ function teardown() {
 
 function resetState() {
     Object.assign(state, {
+        preparedQuestionsOriginal: [],
         preparedQuestionsPool:  [],
         conversationHistory:    [],
         followupDepth:          0,
+        awaitingConsent:        false,
         declinedTopics:         [],
         exploredNewDetails:     [],
         lastQuestion:           '',
         lastQuestionMeta:       {},
         turnNumber:             0,
+        conversationRevision:   0,
+        answerRevisionInProgress: false,
+        answerEditActive:       false,
         sessionId:              '',
+        realtimeTranscriptionModel: null,
         // settings intentionally not reset — they persist across sessions
         sessionStartTime:       null,
         sessionStartPerf:       null,
@@ -1686,6 +2712,14 @@ function resetState() {
         acceptingPatientSpeech: false,
         realtimeItems:          {},
         activeRealtimeItemAccepting: false,
+        awaitingCommittedTranscript: false,
+        pendingTranscriptionCommit: null,
+        lastRenderedTranscript: '',
+        transcriptEditBaseline: null,
+        transcriptEditLatest: null,
+        manualTranscriptOverride: null,
+        manualTranscriptAutoSnapshot: '',
+        transcriptionConfidence: null,
         currentPatientTurnStartSeconds: null,
         currentPatientSpeechStartSeconds: null,
         currentPatientSpeechEndSeconds: null,
@@ -1712,9 +2746,21 @@ function resetState() {
         onboardingChunks:       {},
         onboardingMime:         {},
         onboardingText:         { about: '', likeness: '' },
+        bugReportScreenshotBlob: null,
+        bugReportContext:        null,
+        bugReportPreviewUrl:     '',
+        bugReportRecorder:       null,
+        bugReportStream:         null,
+        bugReportChunks:         [],
+        bugReportMime:           '',
+        bugReportDiscardRecording: false,
+        bugReportWasAcceptingSpeech: false,
+        bugReportTtsWasPlaying:  false,
     });
     el.chatMessages.innerHTML   = '';
     el.liveTranscript.value     = '';
+    el.transcriptLearningStatus.textContent = '';
+    updateTranscriptionConfidenceUI();
     el.sessionTimer.textContent = '00:00';
     el.wordCounter.textContent  = '0 words';
     setStartButtonLoading(false);

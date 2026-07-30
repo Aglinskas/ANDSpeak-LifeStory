@@ -34,6 +34,13 @@
                 </div>
             </div>
 
+            <div id="beta-toolbar" class="beta-toolbar hidden">
+                <button id="btn-report-bug" class="report-bug-btn" type="button">
+                    <span class="report-bug-icon" aria-hidden="true">!</span>
+                    Report bug
+                </button>
+            </div>
+
             <div class="screen-container">
 
                 <!-- SCREEN: LOGIN -->
@@ -293,6 +300,10 @@
                                 <span></span><span></span><span></span>
                             </div>
                         </div>
+                        <div class="transcript-feedback-row">
+                            <span id="transcript-learning-status"></span>
+                            <span id="transcript-confidence"></span>
+                        </div>
                     </div>
 
                     <div class="chat-controls">
@@ -308,49 +319,52 @@
                     <!-- Slide-up settings drawer (accessible during session) -->
                     <div id="session-drawer" class="session-drawer">
                         <div class="drawer-bar">
-                            <span class="drawer-title">Microphone Settings</span>
+                            <span class="drawer-title">Transcription Settings</span>
                             <button id="btn-drawer-close" class="drawer-close-btn" aria-label="Close">✕</button>
                         </div>
 
                         <div class="drawer-setting">
                             <div class="drawer-setting-row">
-                                <span class="drawer-setting-label">Sensitivity</span>
-                                <span class="drawer-setting-val" id="drawer-val-threshold">0.65</span>
+                                <label class="drawer-setting-label" for="drawer-transcription-delay">Text appearance</label>
                             </div>
-                            <div class="slider-wrapper">
-                                <div class="slider-track-bg grad-threshold"></div>
-                                <input type="range" class="settings-slider" id="drawer-slider-threshold"
-                                       min="30" max="90" step="5">
-                            </div>
+                            <select id="drawer-transcription-delay" class="settings-select compact">
+                                <option value="minimal">Fastest</option>
+                                <option value="low">Fast</option>
+                                <option value="medium">Balanced</option>
+                                <option value="high">More accurate</option>
+                                <option value="xhigh">Most context</option>
+                            </select>
+                            <small class="field-help">Faster text may change more while you are speaking.</small>
                         </div>
 
                         <div class="drawer-setting">
                             <div class="drawer-setting-row">
-                                <span class="drawer-setting-label">Pause Length</span>
-                                <span class="drawer-setting-val" id="drawer-val-silence">1.0 sec</span>
+                                <label class="drawer-setting-label" for="drawer-transcription-language">Spoken language</label>
                             </div>
-                            <div class="slider-wrapper">
-                                <div class="slider-track-bg grad-silence"></div>
-                                <input type="range" class="settings-slider" id="drawer-slider-silence"
-                                       min="400" max="2000" step="100">
-                            </div>
+                            <select id="drawer-transcription-language" class="settings-select compact">
+                                <option value="">Detect automatically</option>
+                                <option value="en">English</option>
+                                <option value="nl">Dutch</option>
+                                <option value="de">German</option>
+                                <option value="fr">French</option>
+                                <option value="es">Spanish</option>
+                                <option value="it">Italian</option>
+                                <option value="pt">Portuguese</option>
+                            </select>
+                            <small class="field-help">Choosing the language can improve recognition.</small>
                         </div>
 
                         <details class="drawer-advanced">
                             <summary>Advanced transcription</summary>
+                            <div class="setting-desc advanced-desc">
+                                Speech is transcribed live and finalized when you press Proceed.
+                            </div>
                             <label class="toggle-row compact">
                                 <span>
-                                    <strong>Mute mic during bot speech</strong>
-                                    <small>Prevents speaker audio from entering the transcription stream.</small>
+                                    <strong>Show confidence</strong>
+                                    <small>Shows when the transcription may need checking.</small>
                                 </span>
-                                <input type="checkbox" id="drawer-adv-mute-mic">
-                            </label>
-                            <label class="toggle-row compact">
-                                <span>
-                                    <strong>Ignore bot-turn transcripts</strong>
-                                    <small>Drops transcripts received while the patient turn is inactive.</small>
-                                </span>
-                                <input type="checkbox" id="drawer-adv-ignore-tts">
+                                <input type="checkbox" id="drawer-transcription-logprobs">
                             </label>
                             <label class="toggle-row compact">
                                 <span>
@@ -362,7 +376,7 @@
                             <label class="toggle-row compact">
                                 <span>
                                     <strong>Realtime debug logging</strong>
-                                    <small>Logs VAD and transcript events in the browser console.</small>
+                                    <small>Logs transcription events in the browser console.</small>
                                 </span>
                                 <input type="checkbox" id="drawer-adv-debug">
                             </label>
@@ -507,58 +521,66 @@
 
                     <div class="settings-content">
 
-                        <!-- Microphone Sensitivity -->
                         <div class="setting-card">
-                            <div class="setting-name">Microphone Sensitivity</div>
+                            <div class="setting-name">Live Transcription</div>
                             <div class="setting-desc">
-                                Controls how loudly you need to speak before the app starts listening.
-                                If random words appear that you didn't say, move the slider slightly to the right.
-                                If your voice isn't being picked up at the start of sentences, move it left.
+                                Choose how quickly words appear and tell the app which language you normally speak.
+                                These choices belong only to your account and are used for future conversations.
                             </div>
-                            <div class="slider-end-labels">
-                                <span>More sensitive</span>
-                                <span>Less sensitive</span>
+                            <div class="settings-field">
+                                <label for="transcription-delay">How quickly should text appear?</label>
+                                <select id="transcription-delay" class="settings-select">
+                                    <option value="minimal">Fastest — earliest text, more likely to change</option>
+                                    <option value="low">Fast — good for live captions</option>
+                                    <option value="medium">Balanced — a little more context</option>
+                                    <option value="high">More accurate — text appears later</option>
+                                    <option value="xhigh">Most context — longest wait</option>
+                                </select>
+                                <small>Fast is the recommended starting point for conversation.</small>
                             </div>
-                            <div class="slider-wrapper">
-                                <div class="slider-track-bg grad-threshold"></div>
-                                <input type="range" class="settings-slider" id="slider-threshold"
-                                       min="30" max="90" step="5" value="65">
+                            <div class="settings-field">
+                                <label for="transcription-language">Which language will you usually speak?</label>
+                                <select id="transcription-language" class="settings-select">
+                                    <option value="">Detect automatically</option>
+                                    <option value="en">English</option>
+                                    <option value="nl">Dutch</option>
+                                    <option value="de">German</option>
+                                    <option value="fr">French</option>
+                                    <option value="es">Spanish</option>
+                                    <option value="it">Italian</option>
+                                    <option value="pt">Portuguese</option>
+                                </select>
+                                <small>A language hint can help with names and words that sound similar.</small>
                             </div>
-                            <div class="slider-bottom-row">
-                                <div class="zone-legend">
-                                    <span class="zone-dot red"></span> Too sensitive
-                                    <span class="zone-dot green"></span> Best range
-                                    <span class="zone-dot amber"></span> May miss voice
-                                </div>
-                                <div class="slider-val" id="val-threshold">0.65</div>
-                            </div>
+                            <label class="toggle-row">
+                                <span>
+                                    <strong>Show transcription confidence</strong>
+                                    <small>Displays a simple notice when recognized words may need checking. This requests extra diagnostic information from the transcription service.</small>
+                                </span>
+                                <input type="checkbox" id="transcription-logprobs">
+                            </label>
                         </div>
 
-                        <!-- Speaking Pause -->
                         <div class="setting-card">
-                            <div class="setting-name">Speaking Pause Length</div>
+                            <div class="setting-name">Personal Word Dictionary</div>
                             <div class="setting-desc">
-                                How long the app waits after you stop speaking before it saves what you said.
-                                If it cuts you off mid-sentence, move the slider to the right.
-                                If responses feel slow to register, move it left.
+                                Teach the app names, places, and special words it often hears incorrectly.
+                                During a conversation, correcting a word in the response box automatically adds that correction here.
+                                Your dictionary is private to your account.
                             </div>
-                            <div class="slider-end-labels">
-                                <span>Shorter pause</span>
-                                <span>Longer pause</span>
-                            </div>
-                            <div class="slider-wrapper">
-                                <div class="slider-track-bg grad-silence"></div>
-                                <input type="range" class="settings-slider" id="slider-silence"
-                                       min="400" max="2000" step="100" value="1000">
-                            </div>
-                            <div class="slider-bottom-row">
-                                <div class="zone-legend">
-                                    <span class="zone-dot red"></span> Cuts off early
-                                    <span class="zone-dot green"></span> Best range
-                                    <span class="zone-dot amber"></span> Slow response
-                                </div>
-                                <div class="slider-val" id="val-silence">1.0 sec</div>
-                            </div>
+                            <form id="dictionary-form" class="dictionary-form">
+                                <label class="settings-field">
+                                    <span>What the transcription writes</span>
+                                    <input id="dictionary-heard" type="text" maxlength="100" placeholder="For example: eye diss" required>
+                                </label>
+                                <label class="settings-field">
+                                    <span>What it should write instead</span>
+                                    <input id="dictionary-preferred" type="text" maxlength="100" placeholder="For example: Aidas" required>
+                                </label>
+                                <button type="submit" class="personality-add-btn">Add correction</button>
+                            </form>
+                            <div id="dictionary-list" class="dictionary-list"></div>
+                            <div id="dictionary-status" class="dictionary-status" role="status"></div>
                         </div>
 
                         <!-- Agent Personality -->
@@ -661,26 +683,11 @@
 	                            <div class="personality-status" id="likeness-status"></div>
 	                        </div>
 
-	                        <details class="setting-card advanced-card">
+                        <details class="setting-card advanced-card">
                             <summary>Advanced Transcription Settings</summary>
                             <div class="setting-desc advanced-desc">
-                                Experimental controls for reducing short false transcripts such as “bye”
-                                or “thank you.” Changes apply immediately during an active session where possible.
+                                Speech is transcribed as the participant talks and finalized when Proceed is pressed.
                             </div>
-                            <label class="toggle-row">
-                                <span>
-                                    <strong>Mute microphone while the chatbot speaks</strong>
-                                    <small>Best first defense against the app transcribing its own audio.</small>
-                                </span>
-                                <input type="checkbox" id="adv-mute-mic">
-                            </label>
-                            <label class="toggle-row">
-                                <span>
-                                    <strong>Ignore transcripts outside patient turns</strong>
-                                    <small>Drops realtime transcript events when the response box is disabled.</small>
-                                </span>
-                                <input type="checkbox" id="adv-ignore-tts">
-                            </label>
                             <label class="toggle-row">
                                 <span>
                                     <strong>Filter common hallucinated fillers</strong>
@@ -691,7 +698,7 @@
                             <label class="toggle-row">
                                 <span>
                                     <strong>Realtime debug logging</strong>
-                                    <small>Shows VAD starts/stops and transcript chunks in the browser console.</small>
+                                    <small>Shows realtime transcript events in the browser console.</small>
                                 </span>
                                 <input type="checkbox" id="adv-debug">
                             </label>
@@ -735,11 +742,60 @@
 
             </div>
 
+            <div id="bug-report-modal" class="bug-report-modal hidden" role="dialog"
+                 aria-modal="true" aria-labelledby="bug-report-title">
+                <div class="bug-report-panel">
+                    <div class="bug-report-heading">
+                        <div>
+                            <h2 id="bug-report-title">Report a bug</h2>
+                            <p>The current screen and conversation details will be included.</p>
+                        </div>
+                        <button id="btn-close-bug-report" class="bug-report-close" type="button"
+                                aria-label="Close bug report">✕</button>
+                    </div>
+
+                    <div class="bug-screenshot-card">
+                        <img id="bug-screenshot-preview" alt="Screenshot captured for this bug report">
+                        <div>
+                            <strong id="bug-screenshot-status">Screenshot captured</strong>
+                            <span>It will be saved with your report.</span>
+                        </div>
+                    </div>
+
+                    <label class="bug-description-label" for="bug-description">
+                        What went wrong?
+                        <span>Type below, or speak as naturally as you do in the app.</span>
+                    </label>
+                    <textarea id="bug-description" maxlength="10000"
+                              placeholder="For example: I pressed Proceed after answering, but the next question never appeared."></textarea>
+
+                    <div class="bug-voice-actions">
+                        <button id="btn-record-bug-description" class="bug-voice-btn" type="button">
+                            <span class="bug-mic-dot" aria-hidden="true"></span>
+                            Speak description
+                        </button>
+                        <button id="btn-stop-bug-description" class="bug-stop-btn hidden" type="button">
+                            Stop recording
+                        </button>
+                        <span id="bug-voice-status" class="bug-voice-status" role="status"></span>
+                    </div>
+
+                    <div id="bug-report-status" class="bug-report-status" role="status"></div>
+                    <div class="bug-report-actions">
+                        <button id="btn-cancel-bug-report" class="bug-cancel-btn" type="button">Cancel</button>
+                        <button id="btn-submit-bug-report" class="bug-submit-btn" type="button" disabled>
+                            Submit bug report
+                        </button>
+                    </div>
+                </div>
+            </div>
+
             <div class="iphone-home-indicator"></div>
         </div>
     </div>
 
     <audio id="tts-audio" style="display:none;"></audio>
+    <script src="/vendor/html2canvas.min.js"></script>
     <script src="/app.js"></script>
 </body>
 </html>
