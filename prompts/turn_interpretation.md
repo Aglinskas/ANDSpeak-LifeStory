@@ -3,7 +3,7 @@
 WHAT: Runs early on each conversation turn. Interprets the participant's latest
 reply before routing, so the app can distinguish a real answer from a request to
 change/avoid a topic.
-MODEL: FOLLOWUP_DECISION_MODEL (set in session_config.md)
+MODEL ROLE: `followup_decision` (set in `openai_models_used.json`)
 
 No variables. The latest exchange, current question metadata, biography context,
 and prepared topic list are passed in the user message automatically.

@@ -5,7 +5,7 @@ folding in what they shared today. The result is saved to
 subject_data/<user>/biography.txt and drives future greetings, questions, and the
 portrait. NOTE: the whole biography is rewritten each session (not appended), so this
 prompt must preserve existing facts.
-MODEL: FOLLOWUP_DECISION_MODEL (set in session_config.md)
+MODEL ROLE: `followup_decision` (set in `openai_models_used.json`)
 
 No variables. The current biography and today's transcript are passed as the user
 message automatically. Return plain biography text (no JSON).

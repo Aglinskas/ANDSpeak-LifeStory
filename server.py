@@ -10,8 +10,8 @@ import shutil
 import threading
 import subprocess
 import tempfile
+import time
 import urllib.request
-import urllib.error
 from difflib import SequenceMatcher
 from string import Template
 from datetime import datetime
@@ -32,8 +32,85 @@ if not api_key:
 
 client = OpenAI(api_key=api_key)
 
+OPENAI_MODELS_PATH = 'openai_models_used.json'
+REQUIRED_OPENAI_MODEL_KEYS = (
+    'question_preparation',
+    'followup_decision',
+    'portrait_brief',
+    'portrait_image',
+    'realtime_transcription',
+    'audio_transcription',
+    'text_to_speech',
+)
+
+
+def _load_openai_models():
+    """Load the required model names from the single source-of-truth JSON file."""
+    try:
+        with open(OPENAI_MODELS_PATH, 'r', encoding='utf-8') as f:
+            models = json.load(f)
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"Required OpenAI model configuration is missing: {OPENAI_MODELS_PATH}"
+        ) from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Invalid JSON in {OPENAI_MODELS_PATH}: {exc}"
+        ) from exc
+
+    if not isinstance(models, dict):
+        raise RuntimeError(f"{OPENAI_MODELS_PATH} must contain a JSON object")
+
+    missing = [key for key in REQUIRED_OPENAI_MODEL_KEYS if key not in models]
+    invalid = [
+        key for key in REQUIRED_OPENAI_MODEL_KEYS
+        if key in models and (not isinstance(models[key], str) or not models[key].strip())
+    ]
+    if missing or invalid:
+        problems = []
+        if missing:
+            problems.append(f"missing keys: {', '.join(missing)}")
+        if invalid:
+            problems.append(f"empty or non-string values: {', '.join(invalid)}")
+        raise RuntimeError(f"Invalid {OPENAI_MODELS_PATH}: {'; '.join(problems)}")
+
+    return {key: models[key].strip() for key in REQUIRED_OPENAI_MODEL_KEYS}
+
+
+def _openai_model(role):
+    return _load_openai_models()[role]
+
+
+def _create_chat_completion_with_permission_retry(operation, **kwargs):
+    """Retry the observed one-off permission failure once, then preserve it."""
+    try:
+        return client.chat.completions.create(**kwargs)
+    except Exception as exc:
+        message = str(exc).lower()
+        if getattr(exc, 'status_code', None) != 401 or 'insufficient permissions' not in message:
+            raise
+
+        request_id = getattr(exc, 'request_id', None) or 'unavailable'
+        print(
+            f'[{operation}] OpenAI returned an intermittent permission error; '
+            f'retrying once in 2 seconds (request_id={request_id}).'
+        )
+        time.sleep(2)
+        return client.chat.completions.create(**kwargs)
+
+
+# Fail at startup when the required source file is missing or invalid.
+_load_openai_models()
+
 SUBJECT_ROOT = 'subject_data'
 USER_STORE_PATH = os.path.join(SUBJECT_ROOT, 'users.json')
+BUG_REPORTS_ROOT = 'bug reports'
+MAX_BUG_REPORT_CONTEXT_BYTES = 5 * 1024 * 1024
+MAX_BUG_REPORT_SCREENSHOT_BYTES = 15 * 1024 * 1024
+TRANSCRIPTION_DICTIONARY_FILENAME = 'transcription_dictionary.json'
+TRANSCRIPTION_DELAY_OPTIONS = {'minimal', 'low', 'medium', 'high', 'xhigh'}
+TRANSCRIPTION_LANGUAGE_OPTIONS = {'', 'en', 'nl', 'de', 'fr', 'es', 'it', 'pt'}
+MAX_TRANSCRIPTION_DICTIONARY_ENTRIES = 200
 CREATE_USER_PASSWORD = 'AidasAllows'
 PASSWORD_HASH_ITERATIONS = 260000
 SESSION_ID_RE = re.compile(r'\d{8}_\d{6}')
@@ -135,6 +212,56 @@ def normalize_session_id(session_id):
     if SESSION_ID_RE.fullmatch(session_id):
         return session_id
     return ''
+
+
+def _make_bug_report_dir(username, submitted_at):
+    """Create a collision-safe report folder named with local date/time + user."""
+    safe_username = re.sub(r'[^A-Za-z0-9_-]+', '_', username).strip('_') or 'unknown'
+    base_name = f"{submitted_at.strftime('%Y-%m-%d_%H%M%S')}_{safe_username}"
+    os.makedirs(BUG_REPORTS_ROOT, exist_ok=True)
+
+    for suffix in range(1000):
+        folder_name = base_name if suffix == 0 else f'{base_name}_{suffix:02d}'
+        report_dir = os.path.join(BUG_REPORTS_ROOT, folder_name)
+        try:
+            os.mkdir(report_dir)
+            return folder_name, report_dir
+        except FileExistsError:
+            continue
+    raise RuntimeError('Could not create a unique bug report folder.')
+
+
+def _copy_bug_report_session_logs(username, session_id, report_dir):
+    """Copy small text-based server logs that already exist for this session."""
+    session_id = normalize_session_id(session_id)
+    if not session_id:
+        return []
+
+    source_dir = os.path.join(
+        current_output_dir(username),
+        f'session_{session_id}',
+        'session_log'
+    )
+    if not os.path.isdir(source_dir):
+        return []
+
+    destination_dir = os.path.join(report_dir, 'server_session_logs')
+    copied = []
+    copied_bytes = 0
+    allowed_extensions = {'.json', '.txt', '.csv', '.log'}
+    for filename in sorted(os.listdir(source_dir)):
+        source_path = os.path.join(source_dir, filename)
+        extension = os.path.splitext(filename)[1].lower()
+        if not os.path.isfile(source_path) or extension not in allowed_extensions:
+            continue
+        size = os.path.getsize(source_path)
+        if size > 2 * 1024 * 1024 or copied_bytes + size > 10 * 1024 * 1024:
+            continue
+        os.makedirs(destination_dir, exist_ok=True)
+        shutil.copy2(source_path, os.path.join(destination_dir, filename))
+        copied.append(filename)
+        copied_bytes += size
+    return copied
 
 
 def current_session_output_dir(user_id=None, session_id=None):
@@ -276,21 +403,15 @@ def _reload_config():
     config      = _load_text('session_config.md')
 
     # Parse the tunable knobs from session_config.md (KEY = value lines)
-    model_large  = 'gpt-5.5-2026-04-23'
-    model_fast   = 'gpt-5-nano'
     max_turns    = 15
     max_followup = 2
     for line in config.splitlines():
-        m = re.match(r'QUESTION_PREPARATION_MODEL\s*=\s*(\S+)', line)
-        if m: model_large = m.group(1)
-        m = re.match(r'FOLLOWUP_DECISION_MODEL\s*=\s*(\S+)', line)
-        if m: model_fast = m.group(1)
         m = re.match(r'MAX_TURNS\s*=\s*(\d+)', line)
         if m: max_turns = int(m.group(1))
         m = re.match(r'MAX_FOLLOWUP_DEPTH\s*=\s*(\d+)', line)
         if m: max_followup = int(m.group(1))
 
-    return personality, config, model_large, model_fast, max_turns, max_followup
+    return personality, config, max_turns, max_followup
 
 
 def read_personality_additions(user_id=None):
@@ -343,9 +464,9 @@ def get_effective_personality(user_id=None):
         )
     return AGENT_PERSONALITY
 
-(AGENT_PERSONALITY, SESSION_CONFIG, MODEL_LARGE, MODEL_FAST,
+(AGENT_PERSONALITY, SESSION_CONFIG,
  MAX_TURNS, MAX_FOLLOWUP_DEPTH) = _reload_config()
-print(f"[CONFIG] question model={MODEL_LARGE}  follow-up model={MODEL_FAST}  "
+print(f"[CONFIG] OpenAI models loaded from {OPENAI_MODELS_PATH}  "
       f"max_turns={MAX_TURNS}  max_followup={MAX_FOLLOWUP_DEPTH}")
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
@@ -385,16 +506,28 @@ def write_stats(stats, user_id=None):
 def read_settings(user_id=None):
     path = os.path.join(current_subject_dir(user_id), 'settings.json')
     defaults = {
-        'vad_threshold': 0.65,
-        'silence_duration_ms': 1000,
-        'mute_mic_during_tts': True,
-        'ignore_transcripts_during_tts': True,
+        'transcription_delay': 'low',
+        'transcription_language': '',
+        'transcription_logprobs': False,
         'filter_hallucinated_fillers': True,
         'debug_realtime_events': False,
     }
     if os.path.exists(path):
-        with open(path, 'r') as f:
-            return {**defaults, **json.load(f)}
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                stored = json.load(f)
+            if isinstance(stored, dict):
+                merged = {key: stored.get(key, value) for key, value in defaults.items()}
+                if merged['transcription_delay'] not in TRANSCRIPTION_DELAY_OPTIONS:
+                    merged['transcription_delay'] = defaults['transcription_delay']
+                if merged['transcription_language'] not in TRANSCRIPTION_LANGUAGE_OPTIONS:
+                    merged['transcription_language'] = defaults['transcription_language']
+                merged['transcription_logprobs'] = bool(merged['transcription_logprobs'])
+                merged['filter_hallucinated_fillers'] = bool(merged['filter_hallucinated_fillers'])
+                merged['debug_realtime_events'] = bool(merged['debug_realtime_events'])
+                return merged
+        except (OSError, json.JSONDecodeError):
+            pass
     return defaults
 
 def write_settings_file(settings, user_id=None):
@@ -402,6 +535,64 @@ def write_settings_file(settings, user_id=None):
     os.makedirs(subject_dir, exist_ok=True)
     with open(os.path.join(subject_dir, 'settings.json'), 'w') as f:
         json.dump(settings, f, indent=2)
+
+
+def _normalize_dictionary_phrase(value):
+    if not isinstance(value, str):
+        return ''
+    phrase = re.sub(r'\s+', ' ', value).strip()
+    if not phrase or len(phrase) > 100:
+        return ''
+    return phrase
+
+
+def _sanitize_transcription_dictionary(entries):
+    if not isinstance(entries, list):
+        return []
+
+    sanitized = []
+    positions = {}
+    for raw in entries[:MAX_TRANSCRIPTION_DICTIONARY_ENTRIES]:
+        if not isinstance(raw, dict):
+            continue
+        heard = _normalize_dictionary_phrase(raw.get('heard'))
+        preferred = _normalize_dictionary_phrase(raw.get('preferred'))
+        if not heard or not preferred or heard == preferred:
+            continue
+
+        entry = {'heard': heard, 'preferred': preferred}
+        key = heard.casefold()
+        if key in positions:
+            sanitized[positions[key]] = entry
+        else:
+            positions[key] = len(sanitized)
+            sanitized.append(entry)
+    return sanitized
+
+
+def read_transcription_dictionary(user_id=None):
+    path = os.path.join(current_subject_dir(user_id), TRANSCRIPTION_DICTIONARY_FILENAME)
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            payload = json.load(f)
+        entries = payload.get('entries', []) if isinstance(payload, dict) else payload
+        return _sanitize_transcription_dictionary(entries)
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def write_transcription_dictionary(entries, user_id=None):
+    subject_dir = current_subject_dir(user_id)
+    os.makedirs(subject_dir, exist_ok=True)
+    sanitized = _sanitize_transcription_dictionary(entries)
+    destination = os.path.join(subject_dir, TRANSCRIPTION_DICTIONARY_FILENAME)
+    temp_path = destination + '.tmp'
+    with open(temp_path, 'w', encoding='utf-8') as f:
+        json.dump({'entries': sanitized}, f, indent=2, ensure_ascii=False)
+    os.replace(temp_path, destination)
+    return sanitized
 
 def request_session_id(default=''):
     try:
@@ -598,11 +789,16 @@ def get_settings():
 def save_settings_route():
     try:
         data = request.json or {}
+        transcription_delay = str(data.get('transcription_delay', 'low')).strip().lower()
+        if transcription_delay not in TRANSCRIPTION_DELAY_OPTIONS:
+            transcription_delay = 'low'
+        transcription_language = str(data.get('transcription_language', '')).strip().lower()
+        if transcription_language not in TRANSCRIPTION_LANGUAGE_OPTIONS:
+            transcription_language = ''
         settings = {
-            'vad_threshold':       max(0.30, min(0.90, float(data.get('vad_threshold', 0.65)))),
-            'silence_duration_ms': max(400,  min(2000, int(data.get('silence_duration_ms', 1000)))),
-            'mute_mic_during_tts': bool(data.get('mute_mic_during_tts', True)),
-            'ignore_transcripts_during_tts': bool(data.get('ignore_transcripts_during_tts', True)),
+            'transcription_delay': transcription_delay,
+            'transcription_language': transcription_language,
+            'transcription_logprobs': bool(data.get('transcription_logprobs', False)),
             'filter_hallucinated_fillers': bool(data.get('filter_hallucinated_fillers', True)),
             'debug_realtime_events': bool(data.get('debug_realtime_events', False)),
         }
@@ -613,6 +809,120 @@ def save_settings_route():
     except Exception as e:
         print(f'Settings save error: {e}')
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/transcription-dictionary', methods=['GET'])
+def get_transcription_dictionary():
+    return jsonify({'entries': read_transcription_dictionary()})
+
+
+@app.route('/api/transcription-dictionary', methods=['POST'])
+def save_transcription_dictionary_route():
+    try:
+        data = request.json or {}
+        if not isinstance(data.get('entries'), list):
+            return jsonify({'error': 'Dictionary entries must be provided as a list.'}), 400
+        entries = write_transcription_dictionary(data['entries'], current_user_id())
+        return jsonify({'ok': True, 'entries': entries})
+    except Exception as e:
+        print(f'Transcription dictionary save error: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+# ─── Beta bug reports ───────────────────────────────────────────────────────
+
+@app.route('/api/bug-reports', methods=['POST'])
+def save_bug_report():
+    """Save a screenshot, report text, conversation state, and diagnostics."""
+    try:
+        user_id = current_user_id()
+        description = (request.form.get('description') or '').strip()
+        if not description:
+            return jsonify({'error': 'Please describe the bug before submitting.'}), 400
+        if len(description) > 10000:
+            return jsonify({'error': 'The bug description is too long.'}), 400
+
+        context_text = request.form.get('report_context') or '{}'
+        if len(context_text.encode('utf-8')) > MAX_BUG_REPORT_CONTEXT_BYTES:
+            return jsonify({'error': 'The bug report context is too large.'}), 413
+        try:
+            context = json.loads(context_text)
+        except json.JSONDecodeError:
+            return jsonify({'error': 'The bug report context is invalid.'}), 400
+        if not isinstance(context, dict):
+            return jsonify({'error': 'The bug report context must be an object.'}), 400
+
+        screenshot = request.files.get('screenshot')
+        screenshot_bytes = b''
+        if screenshot:
+            screenshot_bytes = screenshot.read(MAX_BUG_REPORT_SCREENSHOT_BYTES + 1)
+            if len(screenshot_bytes) > MAX_BUG_REPORT_SCREENSHOT_BYTES:
+                return jsonify({'error': 'The screenshot is too large.'}), 413
+            if screenshot_bytes and not screenshot_bytes.startswith(b'\x89PNG\r\n\x1a\n'):
+                return jsonify({'error': 'The screenshot is not a valid PNG image.'}), 400
+
+        submitted_at = datetime.now().astimezone()
+        folder_name, report_dir = _make_bug_report_dir(user_id, submitted_at)
+        screenshot_filename = ''
+        if screenshot_bytes:
+            screenshot_filename = 'screenshot.png'
+            with open(os.path.join(report_dir, screenshot_filename), 'wb') as f:
+                f.write(screenshot_bytes)
+
+        conversation = context.get('conversation', {})
+        prepared_questions = context.get('prepared_questions', {})
+        client_diagnostics = context.get('diagnostics', {})
+        session_id = normalize_session_id(context.get('session_id'))
+        copied_server_logs = _copy_bug_report_session_logs(
+            user_id, session_id, report_dir
+        )
+
+        report = {
+            'report_id': folder_name,
+            'submitted_by': user_id,
+            'description': description,
+            'server_submitted_at': submitted_at.isoformat(),
+            'client_submitted_at': context.get('client_submitted_at'),
+            'session_id': session_id,
+            'active_screen': context.get('active_screen'),
+            'screenshot_file': screenshot_filename or None,
+            'server_session_log_files': copied_server_logs,
+        }
+        with open(os.path.join(report_dir, 'bug_report.json'), 'w', encoding='utf-8') as f:
+            json.dump(report, f, indent=2, ensure_ascii=False)
+        with open(os.path.join(report_dir, 'conversation_log.json'), 'w', encoding='utf-8') as f:
+            json.dump(conversation, f, indent=2, ensure_ascii=False)
+        with open(os.path.join(report_dir, 'prepared_questions.json'), 'w', encoding='utf-8') as f:
+            json.dump(prepared_questions, f, indent=2, ensure_ascii=False)
+
+        server_diagnostics = {
+            'server_time': submitted_at.isoformat(),
+            'request_remote_address': request.remote_addr,
+            'request_user_agent': request.headers.get('User-Agent', ''),
+            'conversation_limits': {
+                'max_turns': MAX_TURNS,
+                'max_followup_depth': MAX_FOLLOWUP_DEPTH,
+            },
+            'configured_models': _load_openai_models(),
+            'copied_server_session_logs': copied_server_logs,
+        }
+        with open(os.path.join(report_dir, 'diagnostics.json'), 'w', encoding='utf-8') as f:
+            json.dump({
+                'client': client_diagnostics,
+                'server': server_diagnostics,
+                'raw_context': context,
+            }, f, indent=2, ensure_ascii=False)
+
+        print(f'[BUG REPORT] Saved {folder_name}')
+        return jsonify({
+            'ok': True,
+            'report_id': folder_name,
+            'screenshot_saved': bool(screenshot_filename),
+        })
+    except Exception as e:
+        print(f'Bug report save error: {e}')
+        return jsonify({'error': str(e)}), 500
+
 
 # ─── Stats ──────────────────────────────────────────────────────────────────
 
@@ -635,11 +945,13 @@ def session_plan():
         session_id = request_session_id() or datetime.now().strftime("%Y%m%d_%H%M%S")
         current_session_output_dir(user_id, session_id)
         # Reload config on each session start so edits take effect without restart
-        global AGENT_PERSONALITY, SESSION_CONFIG, MODEL_LARGE, MODEL_FAST
+        global AGENT_PERSONALITY, SESSION_CONFIG
         global MAX_TURNS, MAX_FOLLOWUP_DEPTH
-        (AGENT_PERSONALITY, SESSION_CONFIG, MODEL_LARGE, MODEL_FAST,
+        (AGENT_PERSONALITY, SESSION_CONFIG,
          MAX_TURNS, MAX_FOLLOWUP_DEPTH) = _reload_config()
-        print(f"[CONFIG] Reloaded — question model={MODEL_LARGE}  follow-up model={MODEL_FAST}")
+        models = _load_openai_models()
+        question_model = models['question_preparation']
+        print(f"[CONFIG] Reloaded OpenAI models from {OPENAI_MODELS_PATH}")
 
         check_for_partial_saves(user_id)
         clear_session_temp(user_id)
@@ -672,8 +984,9 @@ def session_plan():
                 "(childhood, family, early memories)."
             )
 
-        completion = client.chat.completions.create(
-            model=MODEL_LARGE,
+        completion = _create_chat_completion_with_permission_retry(
+            'SESSION PLAN',
+            model=question_model,
             messages=[
                 {'role': 'system', 'content': system_prompt},
                 {'role': 'user',   'content': user_content}
@@ -689,20 +1002,27 @@ def session_plan():
             'biography_present': bool(biography),
             'biography_chars':   len(biography),
             'biography_keywords': biography_keywords,
-            'model':             MODEL_LARGE,
+            'model':             question_model,
             'output':            result,
             'normalized_questions': questions
         }, 'session_plan')
 
         return jsonify({
             'session_id': session_id,
+            'realtime_transcription_model': models['realtime_transcription'],
             'greeting':  result.get('greeting',  f'Hello, {user_id}! How has your day been?'),
             'questions': questions
         })
 
     except Exception as e:
-        print(f"Session plan error: {e}")
-        return jsonify({'error': str(e)}), 500
+        request_id = getattr(e, 'request_id', None)
+        request_detail = f' request_id={request_id}' if request_id else ''
+        print(f"Session plan error:{request_detail} {e}")
+        return jsonify({
+            'error': str(e),
+            'stage': 'session_plan',
+            'request_id': request_id,
+        }), 500
 
 # ─── Next question (fast model decides: follow up or move on) ────────────────
 
@@ -1131,8 +1451,9 @@ def _answer_biography_question(user_question, biography, prior_text):
         "Answer the participant."
     )
 
-    completion = client.chat.completions.create(
-        model=MODEL_FAST,
+    completion = _create_chat_completion_with_permission_retry(
+        'BIOGRAPHY ANSWER',
+        model=_openai_model('followup_decision'),
         messages=[
             {'role': 'system', 'content': system_prompt},
             {'role': 'user',   'content': user_content}
@@ -1293,8 +1614,9 @@ def _interpret_turn(latest_exchange, biography, prepared_questions):
     )
 
     try:
-        completion = client.chat.completions.create(
-            model=MODEL_FAST,
+        completion = _create_chat_completion_with_permission_retry(
+            'TURN INTERPRETATION',
+            model=_openai_model('followup_decision'),
             messages=[
                 {'role': 'system', 'content': render_prompt('turn_interpretation')},
                 {'role': 'user',   'content': user_content}
@@ -1351,8 +1673,9 @@ def _interpret_consent(conversation_history):
         lines.append(f"Participant: {ex['response']}")
     ctx = "\n".join(lines)
     system = render_prompt('consent_interpretation')
-    completion = client.chat.completions.create(
-        model=MODEL_FAST,
+    completion = _create_chat_completion_with_permission_retry(
+        'CONSENT INTERPRETATION',
+        model=_openai_model('followup_decision'),
         messages=[
             {'role': 'system', 'content': system},
             {'role': 'user',   'content': ctx + "\n\nDoes the participant want to keep talking about that topic?"},
@@ -1595,7 +1918,7 @@ def next_question():
                 'last_response':          latest_exchange.get('response', ''),
                 'followup_depth_in':      followup_depth,
                 'prepared_remaining_in':  len(prepared_questions),
-                'model':                  MODEL_FAST,
+                'model':                  _openai_model('followup_decision'),
                 'biography_question':     True,
                 'biography_chars':        len(biography),
                 'turn_interpretation':    turn_interpretation,
@@ -1627,8 +1950,9 @@ def next_question():
             "What should the interviewer say next?"
         )
 
-        completion = client.chat.completions.create(
-            model=MODEL_FAST,
+        completion = _create_chat_completion_with_permission_retry(
+            'NEXT QUESTION',
+            model=_openai_model('followup_decision'),
             messages=[
                 {'role': 'system', 'content': system_prompt},
                 {'role': 'user',   'content': user_content}
@@ -1654,7 +1978,7 @@ def next_question():
 
         # Deterministic state machine. The model supplies the wording and the soft
         # "significant?" judgment; code decides WHEN follow-ups may continue so the
-        # cap never depends on the model (gpt-nano routinely miscounts depth).
+        # cap never depends on the model, which may miscount follow-up depth.
         awaiting_out = False
 
         def _move_on():
@@ -1807,7 +2131,7 @@ def next_question():
             'last_response':          last_response,
             'followup_depth_in':      followup_depth,
             'prepared_remaining_in':  len(prepared_questions),
-            'model':                  MODEL_FAST,
+            'model':                  _openai_model('followup_decision'),
             'turn_interpretation':     turn_interpretation,
             'unexplored_new_details':  unexplored_details,
             'llm_output':             llm_out,
@@ -1819,8 +2143,29 @@ def next_question():
         return jsonify(result)
 
     except Exception as e:
-        print(f"Next question error: {e}")
-        return jsonify({'error': str(e)}), 500
+        request_id = getattr(e, 'request_id', None)
+        status_code = getattr(e, 'status_code', None)
+        failed_turn = locals().get('turn_number')
+        print(
+            f"Next question error: turn={failed_turn} status={status_code} "
+            f"request_id={request_id} {e}"
+        )
+        if failed_turn:
+            try:
+                write_debug(current_user_id(), {
+                    'turn': failed_turn,
+                    'stage': 'next_question',
+                    'status_code': status_code,
+                    'request_id': request_id,
+                    'error': str(e),
+                }, f'next_question_turn{failed_turn:02d}_error')
+            except Exception as debug_error:
+                print(f'Next question error log failed: {debug_error}')
+        return jsonify({
+            'error': str(e),
+            'stage': 'next_question',
+            'request_id': request_id,
+        }), 500
 
 # ─── Biography update (GPT-5-nano rewrites biography after session) ──────────
 
@@ -1848,7 +2193,7 @@ def update_biography():
         )
 
         completion = client.chat.completions.create(
-            model=MODEL_FAST,
+            model=_openai_model('followup_decision'),
             messages=[
                 {'role': 'system', 'content': system_prompt},
                 {'role': 'user',   'content': user_content}
@@ -1871,7 +2216,7 @@ def update_biography():
         print(f"Biography update error: {e}")
         return jsonify({'error': str(e)}), 500
 
-# ─── Biography portrait (gpt-image streams a Ghibli-style scene) ─────────────
+# ─── Biography portrait (the Images API streams a Ghibli-style scene) ────────
 # Config + style instructions live in portrait_generation.md at the repo root.
 # Strategy: a locked base.png keeps the person consistent; each session only the
 # surrounding scene is regenerated, anchored to base.png + any reference photos.
@@ -1881,12 +2226,10 @@ PORTRAIT_JOBS = {}
 PORTRAIT_LOCK = threading.Lock()
 
 _PORTRAIT_DEFAULTS = {
-    'IMAGE_MODEL':    'gpt-image-1',
     'IMAGE_SIZE':     '1024x1024',
     'IMAGE_QUALITY':  'medium',
     'PARTIAL_IMAGES': 2,
     'INPUT_FIDELITY': 'high',
-    'BRIEF_MODEL':    'gpt-4o',
 }
 
 
@@ -2081,6 +2424,9 @@ def _generate_portrait_job(user_id):
             return
 
         instructions, cfg = _load_portrait_config()
+        models = _load_openai_models()
+        cfg['IMAGE_MODEL'] = models['portrait_image']
+        cfg['BRIEF_MODEL'] = models['portrait_brief']
         images_dir = _images_dir(user_id)
         p = _portrait_paths(user_id)
         os.makedirs(images_dir, exist_ok=True)
@@ -2227,34 +2573,50 @@ def portrait_session_img(session_num):
         return send_from_directory(images_dir, filename, max_age=0)
     return '', 404
 
-# ─── Realtime API SDP proxy ──────────────────────────────────────────────────
+# Realtime transcription client secret
 
-@app.route('/api/realtime-sdp', methods=['POST'])
-def realtime_sdp():
+@app.route('/api/realtime-token', methods=['POST'])
+def realtime_token():
     try:
-        sdp_offer = request.data.decode('utf-8')
-        if not sdp_offer:
-            return jsonify({'error': 'No SDP offer provided'}), 400
+        settings = read_settings()
+        transcription = {
+            'model': _openai_model('realtime_transcription'),
+            'delay': settings['transcription_delay'],
+        }
+        if settings['transcription_language']:
+            transcription['language'] = settings['transcription_language']
 
-        req = urllib.request.Request(
-            'https://api.openai.com/v1/realtime/calls?model=gpt-realtime-2',
-            data=sdp_offer.encode('utf-8'),
-            headers={
-                'Authorization': f'Bearer {api_key}',
-                'Content-Type': 'application/sdp'
-            }
+        secret = client.realtime.client_secrets.create(
+            expires_after={
+                'anchor': 'created_at',
+                'seconds': 60,
+            },
+            session={
+                'type': 'transcription',
+                'audio': {
+                    'input': {
+                        'transcription': transcription,
+                        'turn_detection': None,
+                    }
+                },
+                'include': (
+                    ['item.input_audio_transcription.logprobs']
+                    if settings['transcription_logprobs']
+                    else []
+                ),
+            },
+            timeout=10.0,
         )
-        with urllib.request.urlopen(req) as resp:
-            sdp_answer = resp.read().decode('utf-8')
 
-        return sdp_answer, 200, {'Content-Type': 'application/sdp'}
-    except urllib.error.HTTPError as e:
-        body = e.read().decode('utf-8')
-        print(f"Realtime SDP error: {body}")
-        return body, e.code, {'Content-Type': 'application/json'}
+        return jsonify({
+            'value': secret.value,
+            'expires_at': secret.expires_at,
+        })
     except Exception as e:
-        print(f"Realtime SDP error: {e}")
-        return jsonify({'error': str(e)}), 500
+        print(f'Realtime token error: {e}')
+        return jsonify({
+            'error': 'Could not create realtime transcription connection.'
+        }), 502
 
 # ─── TTS ────────────────────────────────────────────────────────────────────
 
@@ -2279,12 +2641,16 @@ def text_to_speech():
             turn_label = f"turn_{int(turn_number):03d}_agent"
         except (TypeError, ValueError):
             turn_label = "turn_unknown_agent"
-        text_hash      = hashlib.md5(text.encode('utf-8')).hexdigest()
+        tts_model      = _openai_model('text_to_speech')
+        cache_identity = f'{tts_model}\0alloy\0{text}'
+        text_hash      = hashlib.md5(cache_identity.encode('utf-8')).hexdigest()
         cache_filename = f"{turn_label}_tts_{text_hash}.mp3"
         cache_path     = os.path.join(audio_dir, cache_filename)
 
         if not os.path.exists(cache_path):
-            response = client.audio.speech.create(model="tts-1", voice="alloy", input=text)
+            response = client.audio.speech.create(
+                model=tts_model, voice="alloy", input=text
+            )
             with open(cache_path, "wb") as f:
                 f.write(response.content)
 
@@ -2682,7 +3048,9 @@ def _transcribe_audio_upload(audio_file):
 
     try:
         with open(tmp_path, 'rb') as f:
-            result = client.audio.transcriptions.create(model='whisper-1', file=f)
+            result = client.audio.transcriptions.create(
+                model=_openai_model('audio_transcription'), file=f
+            )
         return result.text.strip()
     finally:
         os.remove(tmp_path)
@@ -2701,6 +3069,20 @@ def transcribe_instruction():
 
     except Exception as e:
         print(f'Transcribe instruction error: {e}')
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/transcribe-bug-description', methods=['POST'])
+def transcribe_bug_description():
+    try:
+        if 'audio' not in request.files:
+            return jsonify({'error': 'No audio provided'}), 400
+
+        text = _transcribe_audio_upload(request.files['audio'])
+        print(f'[TRANSCRIBE] Bug description received ({len(text)} characters)')
+        return jsonify({'text': text})
+    except Exception as e:
+        print(f'Bug description transcription error: {e}')
         return jsonify({'error': str(e)}), 500
 
 

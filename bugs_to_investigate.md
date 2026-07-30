@@ -40,9 +40,9 @@ If microphone access and recording succeed but Realtime setup fails, the catch b
 
 References: `static/app.js:1005`, `static/app.js:1043`
 
-### 7. High: `/api/next-question` failures are not detected correctly
+### 7. Resolved: `/api/next-question` failures are detected before speech playback
 
-The frontend parses the response but never checks `res.ok` or `next.error`. A JSON-formatted HTTP 500 can be passed into `askDynamicQuestion()`, producing a generic thank-you message followed by another unanswered participant turn rather than ending cleanly.
+The frontend now checks `res.ok`, the error payload, the action value, and whether a non-wrap-up turn contains text before calling `askDynamicQuestion()`. Failed requests follow the explicit wrap-up path, while valid empty wrap-up responses receive a visible fallback acknowledgment that is also recorded. The backend persists next-question error details, including the OpenAI request ID when available.
 
 References: `static/app.js:1211`
 
@@ -58,35 +58,29 @@ Five calls request `json_object`, then assume particular keys and types. JSON mo
 
 References: `server.py:675`, `server.py:1630`, [OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)
 
-### 10. Medium: Realtime is configured as a general assistant instead of transcription-only
-
-The app opens `gpt-realtime-2`, sets `type: "realtime"`, and adds `whisper-1` transcription. The current API offers `type: "transcription"` with `gpt-realtime-whisper`, specifically intended for streaming speech-to-text without assistant responses. This should be evaluated for latency, cost, and simpler behavior.
-
-References: `server.py:2240`, `static/app.js:1298`, [OpenAI Realtime transcription](https://developers.openai.com/api/docs/guides/realtime-transcription)
-
-### 11. Medium: The Realtime handshake uses a less explicit configuration pattern
+### 10. Medium: The Realtime handshake uses a less explicit configuration pattern
 
 Current unified-interface guidance sends SDP and session configuration together as multipart data. The app sends raw SDP with a model query parameter and configures the session afterward over the data channel. Supplying configuration during initialization reduces setup races and lets the backend add a privacy-preserving safety identifier.
 
 References: `server.py:2232`, [OpenAI WebRTC guide](https://developers.openai.com/api/docs/guides/realtime-webrtc)
 
-### 12. Medium: Sensitive participant data is duplicated into debug files and console output
+### 11. Medium: Sensitive participant data is duplicated into debug files and console output
 
 Full biographies, responses, model decisions, newly introduced people, and reasoning are written as plaintext and printed. For cognitive-health research, debug logging needs opt-in levels, redaction, retention limits, and restricted access.
 
 References: `server.py:416`
 
-### 13. Medium: The configured image model is deprecated
+### 12. Medium: The configured image model is deprecated
 
-`portrait_generation.md` selects `gpt-image-1.5`, which the current model catalog marks deprecated. GPT Image 2 should be tested before migration, particularly for reference-image fidelity and cost.
+The `portrait_image` selection in `openai_models_used.json` should be checked against the current model catalog before deployment. Any migration should be tested for reference-image fidelity and cost.
 
 References: `portrait_generation.md:9`, [OpenAI model catalog](https://developers.openai.com/api/docs/models/all)
 
-### 14. Medium: OpenAI SDK behavior is not reproducible
+### 13. Medium: OpenAI SDK behavior is not reproducible
 
 There is no dependency manifest or pinned `openai` version. The local environment currently has `openai 2.16.0`, while the code contains a `TypeError` fallback for older image APIs. A deployment can silently receive different request behavior.
 
-### 15. Deployment security blockers exist outside the OpenAI integration
+### 14. Deployment security blockers exist outside the OpenAI integration
 
 The create-user password is hardcoded, account passwords may be four characters, there is no login rate limiting or CSRF protection, and Flask starts with debug mode enabled. These are unacceptable if the app is exposed beyond a controlled local research machine.
 

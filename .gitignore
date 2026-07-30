@@ -9,6 +9,7 @@ open_AI_key.txt
 
 # User/private runtime data
 subject_data/
+bug reports/
 
 # Legacy/generated audio and session artifacts
 static/audio/

@@ -2,17 +2,12 @@
 
 Controls the biography-portrait that is generated at the end of every session and shown
 on the home screen. Edit this file and it takes effect on the next generation — no restart
-needed. The `KEY = value` lines below are parsed as settings; everything under
-"## Instructions" is sent to the models as guidance.
+needed. Model names are configured centrally in `openai_models_used.json`. The `KEY = value`
+lines below are parsed as non-model settings; everything under "## Instructions" is sent to
+the models as guidance.
 
 ## Settings
 
-IMAGE_MODEL = gpt-image-1.5
-# Options (switch by changing the line above):
-#   gpt-image-2      — latest, highest quality (needs account access)
-#   gpt-image-1.5    — high quality
-#   gpt-image-1      — widely available default
-#   gpt-image-1-mini — cheapest / fastest, lower fidelity
 IMAGE_SIZE = 1024x1024
 # Options: 1024x1024 (square), 1024x1536 (portrait), 1536x1024 (landscape), auto
 IMAGE_QUALITY = high
@@ -22,8 +17,6 @@ PARTIAL_IMAGES = 0
 # costs a little extra. 2 gives a nice reveal without much added cost.
 INPUT_FIDELITY = high
 # high = stay faithful to the reference photos / base portrait. low = looser.
-BRIEF_MODEL = gpt-5.5-2026-04-23
-# The text model that turns the biography into a scene brief.
 
 ## Instructions
 

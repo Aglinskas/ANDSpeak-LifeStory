@@ -3,7 +3,7 @@
 WHAT: Runs on EVERY conversation turn. Decides whether the agent asks a follow-up,
 moves to the next prepared question, checks in ("keep talking or move on?"), or
 wraps up — and writes the spoken acknowledgment + question.
-MODEL: FOLLOWUP_DECISION_MODEL (set in session_config.md)
+MODEL ROLE: `followup_decision` (set in `openai_models_used.json`)
 ALSO SEES: agent_personality.md and the participant's biography are prepended
 automatically, so you can refer to "the biography above".
 

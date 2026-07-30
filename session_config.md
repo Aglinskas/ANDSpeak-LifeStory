@@ -1,9 +1,6 @@
 # Session Configuration
 
-## Model Settings
-# Edit these to change which OpenAI models are used
-QUESTION_PREPARATION_MODEL = gpt-5.5-2026-04-23
-FOLLOWUP_DECISION_MODEL = gpt-5.4-nano-2026-03-17
+OpenAI model names are configured centrally in `openai_models_used.json`.
 
 ## Conversation Limits
 # These are ENFORCED in code (not just suggested to the model).
