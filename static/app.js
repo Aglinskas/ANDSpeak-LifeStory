@@ -2286,6 +2286,11 @@ function finalizePendingTranscriptEdit() {
         state.manualTranscriptAutoSnapshot = currentAutomaticTranscript();
         el.transcriptLearningStatus.textContent = 'Edit kept for this response.';
     }
+    // The edit is now stable. Keep the edited text as the manual base, then
+    // allow subsequent realtime speech to append after it. Leaving this lock
+    // enabled for the whole answer would hide every later spoken sentence.
+    state.manualTranscriptLocked = false;
+    state.transcriptComposing = false;
     refreshTranscriptUI();
 }
 
@@ -2335,9 +2340,9 @@ function scrollTranscriptToLatest(expectedText) {
 function refreshTranscriptUI() {
     const automaticText = currentAutomaticTranscript();
     if (state.manualTranscriptLocked) {
-        // Once a person edits this answer, the visible text is authoritative.
-        // Realtime events may continue updating automaticText internally, but
-        // must never replace the textarea or move the iPhone keyboard cursor.
+        // While an iPhone keyboard edit is still settling, the visible text is
+        // authoritative. Realtime events continue internally, but cannot replace
+        // the textarea or move the keyboard cursor until the edit is finalized.
         const manualText = el.liveTranscript.value;
         state.manualTranscriptOverride = manualText;
         state.lastRenderedTranscript = manualText;
