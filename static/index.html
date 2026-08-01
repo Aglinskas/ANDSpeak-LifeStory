@@ -248,6 +248,7 @@
 	                                <div class="stat-card-hint">Tap to read</div>
 	                            </div>
 	                        </div>
+                            <div id="app-version" class="app-version">v0.1.0 · loading…</div>
 	                    </div>
 	                </div>
 
@@ -284,6 +285,11 @@
                     </header>
 
                     <div class="chat-area" id="chat-messages"></div>
+
+                    <div id="tts-retry" class="tts-retry hidden" role="alert">
+                        <span>Safari needs one more tap to play the interviewer.</span>
+                        <button id="btn-tts-retry" type="button">Tap to hear the question</button>
+                    </div>
 
                     <div class="visualizer-container">
                         <div class="visualizer-wave-box">
@@ -794,7 +800,7 @@
         </div>
     </div>
 
-    <audio id="tts-audio" style="display:none;"></audio>
+    <audio id="tts-audio" preload="auto" style="display:none;"></audio>
     <script src="/vendor/html2canvas.min.js"></script>
     <script src="/app.js"></script>
 </body>

@@ -71,6 +71,9 @@ const state = {
     sessionRecorder:  null,
     sessionChunks:    [],
     mimeType:         '',
+    ttsPlaybackPrimed: false,
+    pendingTtsRetry:  null,
+    lastTtsPlaybackError: null,
 
     // Visualizer
     audioContext:     null,
@@ -174,6 +177,7 @@ const el = {
     statCardBiography: document.getElementById('stat-card-biography'),
     btnStart:          document.getElementById('btn-start'),
     btnSettings:       document.getElementById('btn-settings'),
+    appVersion:        document.getElementById('app-version'),
     // Settings
     btnSettingsBack:   document.getElementById('btn-settings-back'),
     btnSettingsDone:   document.getElementById('btn-settings-done'),
@@ -233,6 +237,8 @@ const el = {
     transcriptLoading: document.getElementById('transcript-loading'),
     btnProceed:        document.getElementById('btn-proceed'),
     btnEndSession:        document.getElementById('btn-end-session'),
+    ttsRetry:             document.getElementById('tts-retry'),
+    btnTtsRetry:          document.getElementById('btn-tts-retry'),
     // Chat-screen settings drawer
     btnChatSettings:      document.getElementById('btn-chat-settings'),
     sessionDrawer:        document.getElementById('session-drawer'),
@@ -284,10 +290,23 @@ function showScreen(id) {
     });
 }
 
+async function loadAppVersion() {
+    try {
+        const response = await fetch('/api/version', { cache: 'no-store' });
+        const data = await response.json();
+        if (!response.ok || !data.version || !data.commit) throw new Error('Version unavailable');
+        el.appVersion.textContent = `v${data.version} · ${data.commit}`;
+    } catch (error) {
+        console.warn('Could not load app version:', error);
+        el.appVersion.textContent = 'v0.1.0 · commit unavailable';
+    }
+}
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
     updateClock();
+    loadAppVersion();
     setInterval(updateClock, 1000);
     resizeCanvas();
     window.addEventListener('resize', resizeCanvas);
@@ -323,7 +342,11 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    el.btnStart.addEventListener('click', startSession);
+    el.btnStart.addEventListener('click', () => {
+        primeTtsPlayback();
+        startSession();
+    });
+    el.btnTtsRetry.addEventListener('click', retryTtsPlayback);
     el.btnProceed.addEventListener('click', handleProceed);
     el.btnEndSession.addEventListener('click', () => wrapUpSession());
     el.btnHome.addEventListener('click', goHome);
@@ -501,6 +524,8 @@ function buildBugReportContext() {
                 duration: Number.isFinite(el.ttsAudio.duration) ? el.ttsAudio.duration : null,
                 ready_state: el.ttsAudio.readyState,
                 source: el.ttsAudio.currentSrc || '',
+                primed: state.ttsPlaybackPrimed,
+                last_error: cloneForBugReport(state.lastTtsPlaybackError),
             },
         },
     };
@@ -1430,6 +1455,81 @@ function showDrawerApplied() {
 
 // ─── Session start ────────────────────────────────────────────────────────────
 
+// iOS Safari only authorizes audible media when play() is initiated directly
+// by a user gesture. Prime the same element used for TTS before startSession's
+// first await so later question playback remains authorized.
+const SILENT_WAV_DATA_URL = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQQAAACAgICA';
+
+function rememberTtsPlaybackError(error) {
+    state.lastTtsPlaybackError = {
+        name: error?.name || 'Error',
+        message: error?.message || String(error),
+        captured_at: new Date().toISOString(),
+        ready_state: el.ttsAudio.readyState,
+        source: el.ttsAudio.currentSrc || el.ttsAudio.src || '',
+    };
+}
+
+function primeTtsPlayback() {
+    if (state.ttsPlaybackPrimed) return;
+    try {
+        el.ttsAudio.src = SILENT_WAV_DATA_URL;
+        el.ttsAudio.load();
+        const playPromise = el.ttsAudio.play();
+        if (!playPromise) {
+            state.ttsPlaybackPrimed = true;
+            return;
+        }
+        playPromise.then(() => {
+            state.ttsPlaybackPrimed = true;
+            state.lastTtsPlaybackError = null;
+        }).catch(error => {
+            rememberTtsPlaybackError(error);
+            console.warn('Could not prime interview audio:', error);
+        });
+    } catch (error) {
+        rememberTtsPlaybackError(error);
+        console.warn('Could not prime interview audio:', error);
+    }
+}
+
+function hideTtsRetry() {
+    state.pendingTtsRetry = null;
+    el.ttsRetry.classList.add('hidden');
+    el.btnTtsRetry.disabled = false;
+}
+
+function showTtsRetry(conversationRevision, onFailure) {
+    state.pendingTtsRetry = { conversationRevision, onFailure };
+    el.ttsRetry.classList.remove('hidden');
+    el.btnTtsRetry.disabled = false;
+    el.visualizerStatus.textContent = 'Tap below to hear the question';
+}
+
+async function retryTtsPlayback() {
+    const pending = state.pendingTtsRetry;
+    if (!pending || pending.conversationRevision !== state.conversationRevision) {
+        hideTtsRetry();
+        return;
+    }
+    el.btnTtsRetry.disabled = true;
+    try {
+        await el.ttsAudio.play();
+        state.ttsPlaybackPrimed = true;
+        state.lastTtsPlaybackError = null;
+        hideTtsRetry();
+        el.visualizerStatus.textContent = 'Chatbot speaking…';
+    } catch (error) {
+        rememberTtsPlaybackError(error);
+        console.error('TTS playback retry failed:', error);
+        el.btnTtsRetry.disabled = false;
+        if (error?.name !== 'NotAllowedError') {
+            hideTtsRetry();
+            pending.onFailure();
+        }
+    }
+}
+
 async function startSession() {
     setStartButtonLoading(true);
 
@@ -1523,6 +1623,7 @@ async function askDynamicQuestion({ acknowledgment, question, action, question_m
     state.lastQuestion = question;
     state.lastQuestionMeta = question_meta || questionMeta || {};
     setPatientSpeechActive(false);
+    hideTtsRetry();
 
     const isWrapUp = action === 'wrap_up';
     const wrapUpFallback = 'Thank you so much for sharing your story today!';
@@ -1609,11 +1710,27 @@ async function askDynamicQuestion({ acknowledgment, question, action, question_m
         };
         el.ttsAudio.onerror = () => {
             if (conversationRevision !== state.conversationRevision) return;
+            hideTtsRetry();
             finalizeAgentTranscript();
             continueAfterAgent(800);
         };
         el.ttsAudio.src = data.audio_url;
-        await el.ttsAudio.play();
+        el.ttsAudio.load();
+        try {
+            await el.ttsAudio.play();
+            state.ttsPlaybackPrimed = true;
+            state.lastTtsPlaybackError = null;
+        } catch (playbackError) {
+            rememberTtsPlaybackError(playbackError);
+            if (playbackError?.name === 'NotAllowedError') {
+                showTtsRetry(conversationRevision, () => {
+                    finalizeAgentTranscript();
+                    continueAfterAgent(800);
+                });
+                return;
+            }
+            throw playbackError;
+        }
     } catch (err) {
         if (conversationRevision !== state.conversationRevision) return;
         console.error('TTS playback failed:', err);
@@ -2244,6 +2361,7 @@ async function finishSession() {
     el.ttsAudio.onended = null;
     el.ttsAudio.onerror = null;
     el.ttsAudio.pause();
+    hideTtsRetry();
 
     setPatientSpeechActive(false);
     el.liveTranscript.disabled      = true;
@@ -2678,6 +2796,7 @@ function teardown() {
     if (state.peerConnection) state.peerConnection.close();
     if (state.audioContext)   state.audioContext.close();
     if (state.audioStream)    state.audioStream.getTracks().forEach(t => t.stop());
+    hideTtsRetry();
 }
 
 function resetState() {
@@ -2727,6 +2846,9 @@ function resetState() {
         sessionRecorder:        null,
         sessionChunks:          [],
         mimeType:               '',
+        ttsPlaybackPrimed:      false,
+        pendingTtsRetry:        null,
+        lastTtsPlaybackError:   null,
         audioContext:           null,
         analyser:               null,
         dataArray:              null,

@@ -21,6 +21,28 @@ from openai import OpenAI
 app = Flask(__name__, static_folder='static', static_url_path='')
 app.secret_key = os.environ.get("ANDSPEAK_SECRET_KEY") or secrets.token_hex(32)
 
+APP_VERSION = '0.1.0'
+
+def _resolve_git_commit():
+    configured_commit = os.environ.get('ANDSPEAK_GIT_COMMIT', '').strip()
+    if configured_commit:
+        return configured_commit[:10]
+    try:
+        result = subprocess.run(
+            ['git', 'rev-parse', '--short=10', 'HEAD'],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+        commit = result.stdout.strip()
+        return commit if re.fullmatch(r'[0-9a-fA-F]{7,10}', commit) else 'unknown'
+    except (OSError, subprocess.SubprocessError):
+        return 'unknown'
+
+GIT_COMMIT = _resolve_git_commit()
+
 os.makedirs("static", exist_ok=True)
 
 api_key = os.environ.get("OPENAI_API_KEY", "").strip()
@@ -292,7 +314,7 @@ def current_agent_messages_audio_dir(user_id=None):
 def require_login_for_api():
     if not request.path.startswith('/api/'):
         return None
-    if request.path.startswith('/api/auth/'):
+    if request.path.startswith('/api/auth/') or request.path == '/api/version':
         return None
     users = _load_user_store()
     username = current_user_id()
@@ -643,6 +665,12 @@ def check_for_partial_saves(user_id):
 @app.route('/')
 def index():
     return send_from_directory('static', 'index.html')
+
+@app.route('/api/version')
+def app_version():
+    response = jsonify({'version': APP_VERSION, 'commit': GIT_COMMIT})
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 
 @app.route('/style.css')
 def style():
