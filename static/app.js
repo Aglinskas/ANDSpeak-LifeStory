@@ -57,6 +57,8 @@ const state = {
     transcriptEditLatest: null,
     manualTranscriptOverride: null,
     manualTranscriptAutoSnapshot: '',
+    manualTranscriptLocked: false,
+    transcriptComposing: false,
     transcriptionConfidence: null,
     currentPatientTurnStartSeconds: null,
     currentPatientSpeechStartSeconds: null,
@@ -381,7 +383,15 @@ document.addEventListener('DOMContentLoaded', () => {
     bindAdvancedSetting(el.drawerAdvDebug,         'debug_realtime_events', true);
     el.dictionaryForm.addEventListener('submit', handleDictionaryAdd);
     el.dictionaryList.addEventListener('click', handleDictionaryListClick);
+    el.liveTranscript.addEventListener('beforeinput', beginTranscriptManualEdit);
     el.liveTranscript.addEventListener('input', handleTranscriptManualInput);
+    el.liveTranscript.addEventListener('compositionstart', () => {
+        state.transcriptComposing = true;
+        beginTranscriptManualEdit();
+    });
+    el.liveTranscript.addEventListener('compositionend', () => {
+        state.transcriptComposing = false;
+    });
 
     // Settings panel
     el.btnSettings.addEventListener('click', () => {
@@ -1677,8 +1687,11 @@ async function askDynamicQuestion({ acknowledgment, question, action, question_m
     state.transcriptEditLatest = null;
     state.manualTranscriptOverride = null;
     state.manualTranscriptAutoSnapshot = '';
+    state.manualTranscriptLocked = false;
+    state.transcriptComposing = false;
     state.transcriptionConfidence = null;
     el.liveTranscript.value   = '';
+    el.liveTranscript.scrollTop = 0;
     el.transcriptLearningStatus.textContent = '';
     updateTranscriptionConfidenceUI();
     el.liveTranscript.disabled = true;
@@ -2196,7 +2209,16 @@ function currentAutomaticTranscript() {
 }
 
 let _transcriptEditTimer = null;
+function beginTranscriptManualEdit() {
+    if (state.manualTranscriptLocked || el.liveTranscript.disabled) return;
+    state.manualTranscriptLocked = true;
+    state.transcriptEditBaseline = state.lastRenderedTranscript;
+    state.manualTranscriptOverride = el.liveTranscript.value;
+    state.manualTranscriptAutoSnapshot = currentAutomaticTranscript();
+}
+
 function handleTranscriptManualInput() {
+    beginTranscriptManualEdit();
     if (state.transcriptEditBaseline === null) {
         state.transcriptEditBaseline = state.lastRenderedTranscript;
     }
@@ -2301,8 +2323,27 @@ function updateTranscriptWordCount(text) {
     if (totalWords >= 500 && !el.liveTranscript.disabled) setButtonLabel('finish');
 }
 
+function scrollTranscriptToLatest(expectedText) {
+    el.liveTranscript.scrollTop = el.liveTranscript.scrollHeight;
+    requestAnimationFrame(() => {
+        if (!state.manualTranscriptLocked && el.liveTranscript.value === expectedText) {
+            el.liveTranscript.scrollTop = el.liveTranscript.scrollHeight;
+        }
+    });
+}
+
 function refreshTranscriptUI() {
     const automaticText = currentAutomaticTranscript();
+    if (state.manualTranscriptLocked) {
+        // Once a person edits this answer, the visible text is authoritative.
+        // Realtime events may continue updating automaticText internally, but
+        // must never replace the textarea or move the iPhone keyboard cursor.
+        const manualText = el.liveTranscript.value;
+        state.manualTranscriptOverride = manualText;
+        state.lastRenderedTranscript = manualText;
+        updateTranscriptWordCount(manualText);
+        return;
+    }
     let fullText = automaticText;
     const preserveSelection = document.activeElement === el.liveTranscript;
     const selectionStart = preserveSelection ? el.liveTranscript.selectionStart : null;
@@ -2326,6 +2367,7 @@ function refreshTranscriptUI() {
         );
     }
     state.lastRenderedTranscript = fullText;
+    scrollTranscriptToLatest(fullText);
 
     if (fullText && state.acceptingPatientSpeech && state.currentPatientSpeechStartSeconds === null) {
         state.currentPatientSpeechStartSeconds = state.currentPatientTurnStartSeconds ?? sessionSeconds();
@@ -2603,6 +2645,8 @@ function prepareLatestAnswerRevision(bubble) {
     state.transcriptEditLatest = null;
     state.manualTranscriptOverride = null;
     state.manualTranscriptAutoSnapshot = '';
+    state.manualTranscriptLocked = false;
+    state.transcriptComposing = false;
     state.transcriptionConfidence = null;
     state.realtimeItems = {};
     state.activeRealtimeItemAccepting = false;
@@ -2610,6 +2654,7 @@ function prepareLatestAnswerRevision(bubble) {
     clearRealtimeInputBuffer();
 
     el.liveTranscript.value = '';
+    el.liveTranscript.scrollTop = 0;
     el.liveTranscript.disabled = true;
     el.btnProceed.disabled = true;
     el.transcriptLearningStatus.textContent = '';
@@ -2838,6 +2883,8 @@ function resetState() {
         transcriptEditLatest: null,
         manualTranscriptOverride: null,
         manualTranscriptAutoSnapshot: '',
+        manualTranscriptLocked: false,
+        transcriptComposing: false,
         transcriptionConfidence: null,
         currentPatientTurnStartSeconds: null,
         currentPatientSpeechStartSeconds: null,

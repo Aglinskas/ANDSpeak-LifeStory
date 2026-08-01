@@ -15,7 +15,7 @@ import urllib.request
 from difflib import SequenceMatcher
 from string import Template
 from datetime import datetime
-from flask import Flask, request, jsonify, send_from_directory, session
+from flask import Flask, request, jsonify, send_from_directory, session, Response
 from openai import OpenAI
 
 app = Flask(__name__, static_folder='static', static_url_path='')
@@ -664,7 +664,14 @@ def check_for_partial_saves(user_id):
 
 @app.route('/')
 def index():
-    return send_from_directory('static', 'index.html')
+    index_path = os.path.join(app.static_folder, 'index.html')
+    with open(index_path, 'r', encoding='utf-8') as index_file:
+        html = index_file.read().replace('__ASSET_VERSION__', GIT_COMMIT)
+    response = Response(html, mimetype='text/html')
+    # Safari may restore an open page without revalidating it. Never cache the
+    # HTML shell; its commit-versioned asset URLs then load the correct bundle.
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    return response
 
 @app.route('/api/version')
 def app_version():
