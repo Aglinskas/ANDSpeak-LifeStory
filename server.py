@@ -636,6 +636,54 @@ def write_debug(user_id, data, label, session_id=None):
         json.dump(data, f, indent=2, ensure_ascii=False)
     print(f"\n[DEBUG:{label}]\n{json.dumps(data, indent=2, ensure_ascii=False)}\n")
 
+
+def _session_log_value(value, depth=0):
+    """Keep client diagnostics useful, bounded, and free of bulky transcript data."""
+    if depth >= 4:
+        return '[truncated]'
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return value[:1000]
+    if isinstance(value, list):
+        return [_session_log_value(item, depth + 1) for item in value[:30]]
+    if isinstance(value, dict):
+        return {
+            str(key)[:100]: _session_log_value(item, depth + 1)
+            for key, item in list(value.items())[:40]
+        }
+    return str(value)[:1000]
+
+
+def write_session_event(user_id, session_id, event, detail=None, client_time=None):
+    """Append a compact, chronological diagnostic event for one saved session."""
+    session_id = normalize_session_id(session_id)
+    if not session_id:
+        return
+    safe_event = re.sub(r'[^a-z0-9_.-]+', '_', str(event).lower())[:80] or 'unknown'
+    record = {
+        'server_time': datetime.now().isoformat(),
+        'client_time': str(client_time or '')[:64] or None,
+        'event': safe_event,
+        'detail': _session_log_value(detail or {}),
+    }
+    path = os.path.join(current_session_log_dir(user_id, session_id), 'events.jsonl')
+    with open(path, 'a', encoding='utf-8') as f:
+        f.write(json.dumps(record, ensure_ascii=False, separators=(',', ':')) + '\n')
+
+
+@app.route('/api/session-event', methods=['POST'])
+def session_event():
+    """Receive small client lifecycle/connection diagnostics for a session."""
+    data = request.get_json(silent=True) or {}
+    session_id = normalize_session_id(data.get('session_id'))
+    if not session_id:
+        return jsonify({'error': 'A valid session_id is required'}), 400
+    write_session_event(
+        current_user_id(), session_id, data.get('event'), data.get('detail'), data.get('client_time')
+    )
+    return jsonify({'ok': True})
+
 def clear_session_temp(user_id):
     """Clear only debug files; partial saves from crashed sessions are preserved."""
     debug_dir = os.path.join('subject_data', user_id, 'session_temp')
@@ -979,6 +1027,7 @@ def session_plan():
         user_id = current_user_id()
         session_id = request_session_id() or datetime.now().strftime("%Y%m%d_%H%M%S")
         current_session_output_dir(user_id, session_id)
+        write_session_event(user_id, session_id, "session.plan_started", {})
         # Reload config on each session start so edits take effect without restart
         global AGENT_PERSONALITY, SESSION_CONFIG
         global MAX_TURNS, MAX_FOLLOWUP_DEPTH
@@ -2210,6 +2259,8 @@ def update_biography():
         user_id = current_user_id()
         data = request.json or {}
         transcript_entries = data.get('transcript', [])
+        session_id = normalize_session_id(data.get('session_id'))
+        write_session_event(user_id, session_id, "biography.update_started", {"transcript_entries": len(transcript_entries)})
 
         biography = read_biography(user_id)
 
@@ -2246,6 +2297,7 @@ def update_biography():
         write_stats(stats, user_id)
 
         paragraphs = len([p for p in updated_bio.split('\n\n') if p.strip()])
+        write_session_event(user_id, session_id, "biography.update_succeeded", {"paragraphs": paragraphs})
         return jsonify({'success': True, 'biography_paragraphs': paragraphs})
     except Exception as e:
         print(f"Biography update error: {e}")
@@ -2730,6 +2782,7 @@ def partial_save():
         user_id = current_user_id()
         session_id      = normalize_session_id(request.form.get('session_id')) or 'unknown'
         transcript_json = request.form.get('transcript')
+        checkpoint_reason = (request.form.get('reason') or 'turn_checkpoint')[:80]
         audio_file      = request.files.get('audio')
 
         debug_dir = current_session_log_dir(user_id, session_id)
@@ -2739,6 +2792,7 @@ def partial_save():
             with open(path, 'w', encoding='utf-8') as f:
                 f.write(transcript_json)
             print(f'[PARTIAL] transcript saved ({len(transcript_json)} bytes)')
+            write_session_event(user_id, session_id, "checkpoint.transcript_saved", {"reason": checkpoint_reason, "bytes": len(transcript_json)})
 
         if audio_file:
             path = os.path.join(debug_dir, f'partial_{session_id}_audio.webm')
@@ -2905,6 +2959,8 @@ def save_session():
 
         add_patient_segment_audio(transcript_data, mp3_path, session_dir)
         write_session_csv(csv_path, transcript_data)
+
+        write_session_event(user_id, session_id, "session.save_succeeded", {"transcript_entries": len(transcript_data), "audio_bytes": os.path.getsize(mp3_path)})
 
         return jsonify({
             'success':    True,

@@ -2455,7 +2455,7 @@ async function finishSession() {
         const bioRes  = await fetch('/api/update-biography', {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ transcript: state.transcripts })
+            body:    JSON.stringify({ session_id: state.sessionId, transcript: state.transcripts })
         });
         const bioData = await bioRes.json();
         bioParagraphs = bioData.biography_paragraphs ?? '–';
