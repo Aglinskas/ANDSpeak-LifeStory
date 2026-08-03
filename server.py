@@ -1831,7 +1831,7 @@ def next_question():
             return jsonify(result)
 
         # Hard limit — safety net
-        if turn_number > MAX_TURNS:
+        if MAX_TURNS > 0 and turn_number > MAX_TURNS:
             wrap = {
                 'action':             'wrap_up',
                 'acknowledgment':     "You've been so generous with your stories today — thank you.",

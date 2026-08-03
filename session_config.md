@@ -4,13 +4,13 @@ OpenAI model names are configured centrally in `openai_models_used.json`.
 
 ## Conversation Limits
 # These are ENFORCED in code (not just suggested to the model).
-MAX_TURNS = 15              # hard cap on conversational turns per session
+MAX_TURNS = 0               # no hard cap; the participant chooses at the soft target
 MAX_FOLLOWUP_DEPTH = 2      # default follow-ups on one topic before moving on (consent can extend)
 
 ## Session Structure
 - Generate a pool of 8–10 biographical questions at session start
 - Begin with 1–2 easy warm-up questions before going deeper
-- Max 15 conversational turns per session
+- No hard turn cap; after 5 minutes or 500 words, ask whether to end or continue
 - Max 2 consecutive follow-ups on the same topic before moving on
 
 ## Opening Questions

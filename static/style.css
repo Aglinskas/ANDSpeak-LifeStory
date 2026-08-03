@@ -1371,6 +1371,15 @@ body {
     margin-top: auto;
 }
 
+.continuation-choice {
+    display: flex;
+    gap: 10px;
+    width: 100%;
+    margin-top: 10px;
+}
+
+.continuation-choice .btn { flex: 1; }
+
 .icon-arrow {
     width: 16px;
     height: 16px;

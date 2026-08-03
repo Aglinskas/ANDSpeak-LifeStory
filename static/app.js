@@ -38,6 +38,8 @@ const state = {
     transcripts:      [],
     isFinishing:      false,
     sessionSaved:     false,
+        targetChoiceShown:     false,
+    targetChoiceShown: false,
     pendingAgentTranscriptFinalizer: null,
 
     // Word counting
@@ -239,6 +241,9 @@ const el = {
     transcriptLoading: document.getElementById('transcript-loading'),
     btnProceed:        document.getElementById('btn-proceed'),
     btnEndSession:        document.getElementById('btn-end-session'),
+    continuationChoice: document.getElementById('continuation-choice'),
+    btnContinueSession: document.getElementById('btn-continue-session'),
+    btnChoiceEndSession: document.getElementById('btn-choice-end-session'),
     ttsRetry:             document.getElementById('tts-retry'),
     btnTtsRetry:          document.getElementById('btn-tts-retry'),
     // Chat-screen settings drawer
@@ -351,6 +356,11 @@ document.addEventListener('DOMContentLoaded', () => {
     el.btnTtsRetry.addEventListener('click', retryTtsPlayback);
     el.btnProceed.addEventListener('click', handleProceed);
     el.btnEndSession.addEventListener('click', () => wrapUpSession());
+    el.btnChoiceEndSession.addEventListener('click', () => wrapUpSession());
+    el.btnContinueSession.addEventListener('click', () => {
+        el.continuationChoice.classList.add('hidden');
+        requestAndAskNextQuestion();
+    });
     el.btnHome.addEventListener('click', goHome);
     el.chatMessages.addEventListener('click', handleConversationBubbleAction);
 
@@ -1636,6 +1646,7 @@ async function askDynamicQuestion({ acknowledgment, question, action, question_m
     hideTtsRetry();
 
     const isWrapUp = action === 'wrap_up';
+    const isContinuationChoice = action === 'continuation_choice';
     const wrapUpFallback = 'Thank you so much for sharing your story today!';
     const visibleAcknowledgment = acknowledgment || (isWrapUp && !question ? wrapUpFallback : '');
     const spokenText = [visibleAcknowledgment, question].filter(Boolean).join(' ');
@@ -1673,6 +1684,7 @@ async function askDynamicQuestion({ acknowledgment, question, action, question_m
         const next = () => {
             if (conversationRevision !== state.conversationRevision) return;
             if (isWrapUp) finishSession();
+            else if (isContinuationChoice) { el.continuationChoice.classList.remove('hidden'); el.visualizerStatus.textContent = 'Choose how you would like to continue.'; }
             else enablePatientTurn();
         };
         if (delayMs > 0) setTimeout(next, delayMs);
@@ -1840,9 +1852,10 @@ async function handleProceed() {
         flushPartial({ includeAudio: true });
     }
 
-    // Hit 500-word target — close warmly before saving.
-    if (state.totalWordCount >= 500) {
-        await wrapUpSession();
+    // Ask once at the soft target; a participant may continue indefinitely.
+    if (!state.targetChoiceShown && (state.totalWordCount >= 500 || sessionSeconds() >= 300)) {
+        state.targetChoiceShown = true;
+        await askDynamicQuestion({ acknowledgment: "Thank you for sharing all that, would you like to stop here for today or continue?", question: "", action: "continuation_choice", question_meta: { topic: "session_close", mode: "choice", keywords: [] } });
         return;
     }
 
@@ -2873,6 +2886,7 @@ function resetState() {
         transcripts:            [],
         isFinishing:            false,
         sessionSaved:           false,
+        targetChoiceShown:     false,
         pendingAgentTranscriptFinalizer: null,
         prevQuestionsWordCount: 0,
         totalWordCount:         0,
