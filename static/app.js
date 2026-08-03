@@ -1937,7 +1937,7 @@ function enablePatientTurn() {
     el.liveTranscript.disabled      = false;
     el.btnProceed.disabled          = false;
     el.visualizerStatus.textContent = 'Listening… speak now';
-    setButtonLabel(state.totalWordCount >= 500 ? 'finish' : 'proceed');
+    setButtonLabel('proceed');
 }
 
 function setPatientSpeechActive(active) {
@@ -2338,7 +2338,7 @@ function updateTranscriptWordCount(text) {
     const totalWords = state.prevQuestionsWordCount + currentWords;
     state.totalWordCount = totalWords;
     el.wordCounter.textContent = `${totalWords} words`;
-    if (totalWords >= 500 && !el.liveTranscript.disabled) setButtonLabel('finish');
+    if (!el.liveTranscript.disabled) setButtonLabel('proceed');
 }
 
 function scrollTranscriptToLatest(expectedText) {
