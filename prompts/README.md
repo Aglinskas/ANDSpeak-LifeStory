@@ -24,11 +24,13 @@ Change a file, save, and it takes effect on the **next turn — no restart neede
 | `consent_interpretation.md` | after a "keep talking or move on?" checkpoint — reads the yes/no | `followup_decision` |
 | `biography_update.md`       | end of each session — rewrites the biography | `followup_decision` |
 
-`session_plan.md` returns structured question objects (`text`, `topic`, `mode`,
-`keywords`, `source`, `fills_gap`, `sensitivity`). The server still accepts old
+`session_plan.md` returns structured question objects (`text`, `brief_description`,
+`topic`, `mode`, `keywords`, `source`, `fills_gap`, `sensitivity`). The server still accepts old
 plain-string questions, but topic-aware selection works best when the structured
 fields are present. Keep `topic` broad and generic; put person-specific names,
 places, professions, hobbies, pets, schools, jobs, and cities in `keywords`.
+`brief_description` is the short label shown in the opening topic chooser; the
+full `text` remains the question the interviewer speaks.
 
 ## The image prompts (in `../portrait_generation.md`)
 

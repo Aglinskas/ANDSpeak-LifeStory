@@ -18,6 +18,24 @@ const state = {
     conversationRevision:  0,    // invalidates stale next-question/TTS work after corrections
     answerRevisionInProgress: false,
     answerEditActive:      false,
+    topicChoiceActive:     false,
+    topicChoiceLocked:     false,
+    topicChoiceSeenIds:    [],
+    topicChoiceVisibleIds: [],
+    streak: {
+        current: 0,
+        longest: 0,
+        completed_today: false,
+        status: 'no_sessions',
+        theme_tier: 0,
+        next_milestone: 1,
+    },
+    streakAtSessionStart: null,
+    waveColors: [
+        'rgba(59,130,246,0.65)',
+        'rgba(6,182,212,0.45)',
+        'rgba(139,92,246,0.3)',
+    ],
 
     // Partial save (crash recovery)
     sessionId: '',               // timestamp string, used to name partial files
@@ -180,6 +198,10 @@ const el = {
     statCardSessions:  document.getElementById('stat-card-sessions'),
     statCardBiography: document.getElementById('stat-card-biography'),
     btnStart:          document.getElementById('btn-start'),
+    homeStreak:        document.getElementById('home-streak'),
+    homeStreakTrail:   document.getElementById('home-streak-trail'),
+    homeStreakMessage: document.getElementById('home-streak-message'),
+    homeStreakDetail:  document.getElementById('home-streak-detail'),
     btnSettings:       document.getElementById('btn-settings'),
     appVersion:        document.getElementById('app-version'),
     // Settings
@@ -263,6 +285,13 @@ const el = {
     statDuration:      document.getElementById('stat-duration'),
     statWords:         document.getElementById('stat-words'),
     statParagraphs:    document.getElementById('stat-paragraphs'),
+    finishTitle:       document.querySelector('#screen-finish .finish-title'),
+    finishMessage:     document.querySelector('#screen-finish .finish-message'),
+    streakCelebration: document.getElementById('streak-celebration'),
+    streakCelebrationNumber: document.getElementById('streak-celebration-number'),
+    streakCelebrationTitle: document.getElementById('streak-celebration-title'),
+    streakCelebrationMessage: document.getElementById('streak-celebration-message'),
+    finishStreakTrail: document.getElementById('finish-streak-trail'),
     btnHome:           document.getElementById('btn-home'),
     // Biography screen
     btnBioBack:        document.getElementById('btn-bio-back'),
@@ -820,6 +849,9 @@ function showLoggedOut() {
     teardown();
     resetState();
     state.currentUser = '';
+    state.streak = defaultStreak();
+    state.streakAtSessionStart = null;
+    applyStreakTheme(state.streak);
     el.betaToolbar.classList.add('hidden');
     state.customDictionary = [];
     renderTranscriptionDictionary();
@@ -1079,19 +1111,122 @@ async function handleLogout() {
 
 // ─── Homepage ─────────────────────────────────────────────────────────────────
 
+function defaultStreak() {
+    return {
+        current: 0,
+        longest: 0,
+        completed_today: false,
+        last_completed_date: null,
+        status: 'no_sessions',
+        theme_tier: 0,
+        next_milestone: 1,
+    };
+}
+
+function normalizeStreak(raw) {
+    const fallback = defaultStreak();
+    if (!raw || typeof raw !== 'object') return fallback;
+    return {
+        current: Math.max(0, Number(raw.current) || 0),
+        longest: Math.max(0, Number(raw.longest) || 0),
+        completed_today: Boolean(raw.completed_today),
+        last_completed_date: raw.last_completed_date || null,
+        status: String(raw.status || fallback.status),
+        theme_tier: Math.min(5, Math.max(0, Number(raw.theme_tier) || 0)),
+        next_milestone: raw.next_milestone == null ? null : Math.max(1, Number(raw.next_milestone) || 1),
+        timezone: String(raw.timezone || ''),
+    };
+}
+
+function applyStreakTheme(streak) {
+    const tier = Math.min(5, Math.max(0, Number(streak?.theme_tier) || 0));
+    document.documentElement.dataset.streakTier = String(tier);
+    const styles = getComputedStyle(document.documentElement);
+    state.waveColors = [
+        styles.getPropertyValue('--wave-primary').trim() || 'rgba(59,130,246,0.65)',
+        styles.getPropertyValue('--wave-secondary').trim() || 'rgba(6,182,212,0.45)',
+        styles.getPropertyValue('--wave-tertiary').trim() || 'rgba(139,92,246,0.3)',
+    ];
+}
+
+function renderStreakTrail(container, current, { animateDay = 0 } = {}) {
+    if (!container) return;
+    const filled = Math.min(7, Math.max(0, Number(current) || 0));
+    Array.from(container.children).forEach((dot, index) => {
+        const day = index + 1;
+        dot.classList.toggle('filled', day <= filled);
+        dot.classList.toggle('newly-filled', day === animateDay && day <= filled);
+    });
+}
+
+function streakDayLabel(days) {
+    return `${days}-day story streak`;
+}
+
+function renderHomeStreak(streak) {
+    if (!el.homeStreak) return;
+    const current = streak.current || 0;
+    renderStreakTrail(el.homeStreakTrail, current);
+    el.homeStreak.classList.toggle('is-complete', streak.completed_today);
+
+    let message = 'Start your story streak';
+    let detail = 'Share a little of your story today';
+    if (streak.status === 'active_today') {
+        message = current === 1 ? 'Your story streak has started' : streakDayLabel(current);
+        detail = current >= 7 ? 'Today is complete — your story keeps growing' : 'Today is complete';
+    } else if (streak.status === 'continue_today') {
+        message = `Continue your ${streakDayLabel(current)} today`;
+        detail = current < 7
+            ? `${7 - current} ${7 - current === 1 ? 'day' : 'days'} until your first full week`
+            : 'Share a little today to keep it going';
+    } else if (streak.status === 'restart') {
+        message = 'Start a new story streak';
+        detail = streak.longest > 0
+            ? `Your best is ${streak.longest} ${streak.longest === 1 ? 'day' : 'days'}`
+            : 'Share a little of your story today';
+    }
+
+    el.homeStreakMessage.textContent = message;
+    el.homeStreakDetail.textContent = detail;
+    el.homeStreak.setAttribute(
+        'aria-label',
+        current > 0
+            ? `${message}. ${Math.min(current, 7)} of 7 introductory streak days completed. ${detail}.`
+            : `${message}. ${detail}.`
+    );
+}
+
+function localTimezone() {
+    try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    } catch {
+        return '';
+    }
+}
+
 async function fetchStats() {
     try {
-        const res  = await fetch('/api/stats');
+        const query = new URLSearchParams();
+        const timezone = localTimezone();
+        if (timezone) query.set('timezone', timezone);
+        const queryString = query.toString();
+        const res = await fetch(`/api/stats${queryString ? `?${queryString}` : ''}`);
         if (res.status === 401) {
             showLoggedOut();
-            return;
+            return null;
         }
         const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'Could not load statistics.');
         el.homeSessions.textContent   = data.session_count;
         el.homeParagraphs.textContent = data.biography_paragraphs;
+        state.streak = normalizeStreak(data.streak);
+        applyStreakTheme(state.streak);
+        renderHomeStreak(state.streak);
+        return data;
     } catch {
         el.homeSessions.textContent   = '0';
         el.homeParagraphs.textContent = '0';
+        return null;
     }
 }
 
@@ -1552,6 +1687,7 @@ async function retryTtsPlayback() {
 
 async function startSession() {
     setStartButtonLoading(true);
+    state.streakAtSessionStart = JSON.parse(JSON.stringify(state.streak || defaultStreak()));
 
     try {
         // Session ID used to group all output files for this session.
@@ -1580,8 +1716,14 @@ async function startSession() {
         }
         state.realtimeTranscriptionModel = planData.realtime_transcription_model;
 
-        state.preparedQuestionsPool = planData.questions || [];
-        state.preparedQuestionsOriginal = JSON.parse(JSON.stringify(state.preparedQuestionsPool));
+        const plannedQuestions = Array.isArray(planData.questions) ? planData.questions : [];
+        const openingQuestion = plannedQuestions[0] || null;
+        state.preparedQuestionsOriginal = JSON.parse(JSON.stringify(plannedQuestions));
+        state.preparedQuestionsPool = openingQuestion ? plannedQuestions.slice(1) : [];
+        state.topicChoiceActive = false;
+        state.topicChoiceLocked = false;
+        state.topicChoiceSeenIds = [];
+        state.topicChoiceVisibleIds = [];
         const greeting = planData.greeting || 'Hello! How are you doing today?';
 
         console.log('[SESSION] Greeting:', greeting);
@@ -1626,7 +1768,17 @@ async function startSession() {
         el.btnEndSession.disabled    = false;
         showScreen('screen-chat');
 
-        askDynamicQuestion({ acknowledgment: '', question: greeting, action: 'greeting' });
+        if (openingQuestion) {
+            askDynamicQuestion({
+                acknowledgment: greeting,
+                question: openingQuestion.text,
+                action: 'next_prepared',
+                question_meta: preparedQuestionMeta(openingQuestion),
+                allowTopicChoice: state.preparedQuestionsPool.length > 0,
+            });
+        } else {
+            askDynamicQuestion({ acknowledgment: '', question: greeting, action: 'greeting' });
+        }
 
     } catch (err) {
         console.error('Session start failed:', err);
@@ -1635,9 +1787,304 @@ async function startSession() {
     }
 }
 
+function preparedQuestionId(question) {
+    return String(question?.id || question?.text || '').trim();
+}
+
+function preparedQuestionMeta(question) {
+    return {
+        id: preparedQuestionId(question),
+        brief_description: String(question?.brief_description || '').trim(),
+        topic: String(question?.topic || 'unknown'),
+        mode: String(question?.mode || 'unknown'),
+        keywords: Array.isArray(question?.keywords) ? question.keywords : [],
+        source: String(question?.source || ''),
+        fills_gap: String(question?.fills_gap || ''),
+        sensitivity: String(question?.sensitivity || ''),
+    };
+}
+
+function recordSessionEvent(event, detail = {}) {
+    if (!state.sessionId) return;
+    fetch('/api/session-event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            session_id: state.sessionId,
+            event,
+            detail,
+            client_time: new Date().toISOString(),
+        }),
+    }).catch(error => console.warn(`Could not record ${event}:`, error));
+}
+
+function shuffled(items) {
+    const result = [...items];
+    for (let index = result.length - 1; index > 0; index--) {
+        const swapIndex = Math.floor(Math.random() * (index + 1));
+        [result[index], result[swapIndex]] = [result[swapIndex], result[index]];
+    }
+    return result;
+}
+
+function topicChoiceCandidates() {
+    const seen = new Set();
+    const questions = [];
+    for (const question of state.preparedQuestionsPool) {
+        const id = preparedQuestionId(question);
+        if (!id || !question?.text || seen.has(id)) continue;
+        seen.add(id);
+        questions.push(question);
+    }
+
+    // Prefer gentler choices. High-sensitivity questions only fill a short menu
+    // when the plan does not contain three safer alternatives.
+    const safer = questions.filter(question => question.sensitivity !== 'high');
+    const sensitive = questions.filter(question => question.sensitivity === 'high');
+    return safer.length >= Math.min(3, questions.length) ? safer : [...safer, ...sensitive];
+}
+
+function sampleTopicChoices(count = 3) {
+    const candidates = topicChoiceCandidates();
+    const currentIds = new Set(state.topicChoiceVisibleIds);
+    const seenIds = new Set(state.topicChoiceSeenIds);
+    const selected = [];
+    const selectedIds = new Set();
+    const selectedTopics = new Set();
+
+    const available = shuffled(candidates.filter(question => !currentIds.has(preparedQuestionId(question))));
+    const fallback = shuffled(candidates.filter(question => currentIds.has(preparedQuestionId(question))));
+
+    const take = (items, predicate) => {
+        for (const question of items) {
+            if (selected.length >= count) break;
+            const id = preparedQuestionId(question);
+            if (selectedIds.has(id) || !predicate(question, id)) continue;
+            selected.push(question);
+            selectedIds.add(id);
+            selectedTopics.add(question.topic || 'unknown');
+        }
+    };
+
+    take(available, (question, id) => !seenIds.has(id) && !selectedTopics.has(question.topic || 'unknown'));
+    take(available, (_question, id) => !seenIds.has(id));
+    take(available, question => !selectedTopics.has(question.topic || 'unknown'));
+    take(available, () => true);
+    take(fallback, () => true);
+
+    state.topicChoiceVisibleIds = selected.map(preparedQuestionId);
+    state.topicChoiceSeenIds = Array.from(new Set([
+        ...state.topicChoiceSeenIds,
+        ...state.topicChoiceVisibleIds,
+    ]));
+    return selected;
+}
+
+function attachTopicChoiceLauncher(questionBubble) {
+    dismissTopicChoice({ reason: '', record: false });
+    state.topicChoiceActive = true;
+    state.topicChoiceLocked = false;
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'topic-choice-launcher hidden';
+    button.dataset.topicAction = 'open';
+    button.disabled = true;
+    button.textContent = 'Choose topic';
+    questionBubble.appendChild(button);
+}
+
+function enableTopicChoiceLauncher() {
+    if (!state.topicChoiceActive || state.topicChoiceLocked) return;
+    const button = el.chatMessages.querySelector('.topic-choice-launcher');
+    if (!button) return;
+    button.disabled = false;
+    button.classList.remove('hidden');
+    el.chatMessages.scrollTop = el.chatMessages.scrollHeight;
+}
+
+function renderTopicChooser({ refreshed = false } = {}) {
+    const launcher = el.chatMessages.querySelector('.topic-choice-launcher');
+    const questionBubble = launcher?.closest('.message-bubble.chatbot');
+    if (!questionBubble) return;
+
+    el.chatMessages.querySelector('.topic-chooser')?.remove();
+    const choices = sampleTopicChoices();
+
+    const panel = document.createElement('section');
+    panel.className = 'topic-chooser';
+    panel.setAttribute('role', 'group');
+    panel.setAttribute('aria-label', 'Choose a conversation topic');
+    panel.setAttribute('aria-live', 'polite');
+
+    const header = document.createElement('div');
+    header.className = 'topic-chooser-header';
+
+    const title = document.createElement('div');
+    title.className = 'topic-chooser-title';
+    title.textContent = 'What would you like to talk about?';
+
+    const refresh = document.createElement('button');
+    refresh.type = 'button';
+    refresh.className = 'topic-refresh-btn';
+    refresh.dataset.topicAction = 'refresh';
+    refresh.setAttribute('aria-label', 'Show different topics');
+    refresh.title = 'Show different topics';
+    refresh.innerHTML = '<span aria-hidden="true">↻</span><span>Different topics</span>';
+    refresh.disabled = topicChoiceCandidates().length <= choices.length;
+    header.append(title, refresh);
+
+    const options = document.createElement('div');
+    options.className = 'topic-options';
+
+    const labelCounts = new Map();
+    for (const question of choices) {
+        const label = String(question.brief_description || question.topic || 'Life story').trim();
+        const key = label.toLocaleLowerCase();
+        labelCounts.set(key, (labelCounts.get(key) || 0) + 1);
+    }
+
+    for (const question of choices) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'topic-option-btn';
+        button.dataset.topicAction = 'select';
+        button.dataset.questionId = preparedQuestionId(question);
+
+        const label = String(question.brief_description || question.topic || 'Life story').trim();
+        const labelSpan = document.createElement('span');
+        labelSpan.textContent = label;
+        button.appendChild(labelSpan);
+        if ((labelCounts.get(label.toLocaleLowerCase()) || 0) > 1) {
+            const detail = document.createElement('small');
+            detail.textContent = String(question.topic || 'Life story').replace(/_/g, ' ');
+            button.appendChild(detail);
+        }
+        options.appendChild(button);
+    }
+
+    const ownTopic = document.createElement('button');
+    ownTopic.type = 'button';
+    ownTopic.className = 'topic-option-btn topic-option-own';
+    ownTopic.dataset.topicAction = 'suggest-own';
+    ownTopic.textContent = 'Suggest my own';
+    options.appendChild(ownTopic);
+
+    const back = document.createElement('button');
+    back.type = 'button';
+    back.className = 'topic-choice-back';
+    back.dataset.topicAction = 'close';
+    back.textContent = 'Back to the question';
+
+    panel.append(header, options, back);
+    questionBubble.insertAdjacentElement('afterend', panel);
+    launcher.classList.add('hidden');
+    el.chatMessages.scrollTop = el.chatMessages.scrollHeight;
+    const focusTarget = refreshed ? refresh : options.querySelector('.topic-option-btn');
+    if (focusTarget) requestAnimationFrame(() => focusTarget.focus());
+
+    recordSessionEvent(refreshed ? 'topic_chooser.refreshed' : 'topic_chooser.opened', {
+        question_ids: state.topicChoiceVisibleIds,
+    });
+}
+
+function clearTopicChoiceInput() {
+    setPatientSpeechActive(false);
+    state.activeRealtimeItemAccepting = false;
+    clearRealtimeInputBuffer();
+    state.liveTranscriptText = '';
+    state.pendingDelta = '';
+    state.lastRenderedTranscript = '';
+    state.manualTranscriptOverride = null;
+    state.manualTranscriptAutoSnapshot = '';
+    state.manualTranscriptLocked = false;
+    state.transcriptionConfidence = null;
+    el.liveTranscript.value = '';
+    el.liveTranscript.disabled = true;
+    el.btnProceed.disabled = true;
+    updateTranscriptionConfidenceUI();
+}
+
+function openTopicChooser() {
+    if (!state.topicChoiceActive || state.topicChoiceLocked) return;
+    clearTopicChoiceInput();
+    el.visualizerStatus.textContent = 'Choose a topic below';
+    renderTopicChooser();
+}
+
+function closeTopicChooser() {
+    if (!state.topicChoiceActive || state.topicChoiceLocked) return;
+    el.chatMessages.querySelector('.topic-chooser')?.remove();
+    state.topicChoiceVisibleIds = [];
+    enableTopicChoiceLauncher();
+    enablePatientTurn();
+    el.chatMessages.querySelector('.topic-choice-launcher')?.focus();
+}
+
+function dismissTopicChoice({ reason = '', record = true } = {}) {
+    const hadChoice = state.topicChoiceActive;
+    el.chatMessages.querySelector('.topic-chooser')?.remove();
+    el.chatMessages.querySelector('.topic-choice-launcher')?.remove();
+    state.topicChoiceActive = false;
+    state.topicChoiceLocked = false;
+    state.topicChoiceVisibleIds = [];
+    if (record && hadChoice && reason) recordSessionEvent('topic_chooser.dismissed', { reason });
+}
+
+async function selectPreparedTopic(questionId) {
+    if (!state.topicChoiceActive || state.topicChoiceLocked) return;
+    const question = state.preparedQuestionsPool.find(item => preparedQuestionId(item) === questionId);
+    if (!question) return;
+
+    state.topicChoiceLocked = true;
+    clearTopicChoiceInput();
+    state.preparedQuestionsPool = state.preparedQuestionsPool.filter(
+        item => preparedQuestionId(item) !== questionId
+    );
+    state.followupDepth = 0;
+    state.awaitingConsent = false;
+    recordSessionEvent('topic_chooser.selected', {
+        question_id: questionId,
+        topic: question.topic || 'unknown',
+        mode: question.mode || 'unknown',
+    });
+    dismissTopicChoice({ record: false });
+    await askDynamicQuestion({
+        acknowledgment: '',
+        question: question.text,
+        action: 'next_prepared',
+        question_meta: preparedQuestionMeta(question),
+    });
+}
+
+async function selectOwnTopic() {
+    if (!state.topicChoiceActive || state.topicChoiceLocked) return;
+    state.topicChoiceLocked = true;
+    clearTopicChoiceInput();
+    state.followupDepth = 0;
+    state.awaitingConsent = false;
+    recordSessionEvent('topic_chooser.selected', { selection: 'suggest_own' });
+    dismissTopicChoice({ record: false });
+    await askDynamicQuestion({
+        acknowledgment: '',
+        question: 'What would you like to talk about?',
+        action: 'user_topic_prompt',
+        question_meta: { topic: 'open_choice', mode: 'user_choice', keywords: [] },
+    });
+}
+
+function handleTopicChoiceAction(button) {
+    const action = button.dataset.topicAction;
+    if (action === 'open') openTopicChooser();
+    if (action === 'refresh') renderTopicChooser({ refreshed: true });
+    if (action === 'close') closeTopicChooser();
+    if (action === 'select') selectPreparedTopic(button.dataset.questionId).catch(console.error);
+    if (action === 'suggest-own') selectOwnTopic().catch(console.error);
+}
+
 // ─── Dynamic question flow ────────────────────────────────────────────────────
 
-async function askDynamicQuestion({ acknowledgment, question, action, question_meta, questionMeta }) {
+async function askDynamicQuestion({ acknowledgment, question, action, question_meta, questionMeta, allowTopicChoice = false }) {
     const conversationRevision = state.conversationRevision;
     state.turnNumber++;
     state.lastQuestion = question;
@@ -1657,7 +2104,8 @@ async function askDynamicQuestion({ acknowledgment, question, action, question_m
 
     // Show in chat: acknowledgment and question as separate bubbles when both present
     if (visibleAcknowledgment) appendMessage(visibleAcknowledgment, 'chatbot');
-    if (question)       appendMessage(question, 'chatbot');
+    const questionBubble = question ? appendMessage(question, 'chatbot') : null;
+    if (allowTopicChoice && questionBubble) attachTopicChoiceLauncher(questionBubble);
 
     let agentStartSeconds = null;
     let agentTranscriptSaved = false;
@@ -1685,7 +2133,10 @@ async function askDynamicQuestion({ acknowledgment, question, action, question_m
             if (conversationRevision !== state.conversationRevision) return;
             if (isWrapUp) finishSession();
             else if (isContinuationChoice) { el.continuationChoice.classList.remove('hidden'); el.visualizerStatus.textContent = 'Choose how you would like to continue.'; }
-            else enablePatientTurn();
+            else {
+                if (allowTopicChoice) enableTopicChoiceLauncher();
+                enablePatientTurn();
+            }
         };
         if (delayMs > 0) setTimeout(next, delayMs);
         else next();
@@ -1791,6 +2242,8 @@ function flushPartial({ includeAudio = false, useBeacon = false } = {}) {
 
 async function handleProceed() {
     if (!state.acceptingPatientSpeech || state.pendingTranscriptionCommit) return;
+
+    dismissTopicChoice({ reason: 'answer_submitted' });
 
     finalizePendingTranscriptEdit();
 
@@ -2116,6 +2569,9 @@ function handleRealtimeEvent(event) {
     switch (event.type) {
         case "conversation.item.input_audio_transcription.delta":
             if (!shouldAcceptRealtimeTranscript(event)) break;
+            if (state.topicChoiceActive && String(event.delta || '').trim()) {
+                dismissTopicChoice({ reason: 'participant_started_speaking' });
+            }
             // Delta boundaries are arbitrary and may carry meaningful leading
             // whitespace, so normalize only after the completed event arrives.
             state.pendingDelta += event.delta || "";
@@ -2133,7 +2589,12 @@ function handleRealtimeEvent(event) {
             }
             {
                 const cleaned = cleanTranscriptFragment(event.transcript || "");
-                if (cleaned) state.liveTranscriptText += cleaned + " ";
+                if (cleaned) {
+                    if (state.topicChoiceActive) {
+                        dismissTopicChoice({ reason: 'participant_started_speaking' });
+                    }
+                    state.liveTranscriptText += cleaned + " ";
+                }
             }
             state.pendingDelta        = "";
             updateTranscriptionConfidence(event);
@@ -2232,6 +2693,9 @@ function beginTranscriptManualEdit() {
 
 function handleTranscriptManualInput() {
     beginTranscriptManualEdit();
+    if (state.topicChoiceActive && el.liveTranscript.value.trim()) {
+        dismissTopicChoice({ reason: 'participant_started_typing' });
+    }
     if (state.transcriptEditBaseline === null) {
         state.transcriptEditBaseline = state.lastRenderedTranscript;
     }
@@ -2395,8 +2859,93 @@ function refreshTranscriptUI() {
 
 // ─── Finish session ───────────────────────────────────────────────────────────
 
+function streakThemeTierForCurrent(current) {
+    if (current >= 30) return 5;
+    if (current >= 14) return 4;
+    if (current >= 7) return 3;
+    if (current >= 3) return 2;
+    if (current >= 1) return 1;
+    return 0;
+}
+
+function estimatedStreakAfterCompletion(before) {
+    const prior = normalizeStreak(before);
+    let current = 1;
+    if (prior.completed_today) current = prior.current || 1;
+    else if (prior.status === 'continue_today') current = (prior.current || 0) + 1;
+    const milestones = [1, 3, 7, 14, 30, 60, 100];
+    return {
+        ...prior,
+        current,
+        longest: Math.max(prior.longest || 0, current),
+        completed_today: true,
+        status: 'active_today',
+        theme_tier: streakThemeTierForCurrent(current),
+        next_milestone: milestones.find(milestone => milestone > current) ?? null,
+    };
+}
+
+function renderStreakCelebration(beforeValue, afterValue) {
+    const before = normalizeStreak(beforeValue);
+    const after = normalizeStreak(afterValue);
+    const current = after.current;
+    if (!el.streakCelebration || current < 1 || !after.completed_today) {
+        el.streakCelebration?.classList.add('hidden');
+        return;
+    }
+
+    const sameDay = before.completed_today;
+    const advanced = !sameDay && (
+        before.status === 'continue_today'
+            ? current === before.current + 1
+            : current === 1
+    );
+    const milestone = advanced && [7, 14, 30, 60, 100].includes(current);
+
+    let title;
+    let message;
+    if (sameDay) {
+        title = 'Another chapter added today';
+        message = `Your ${streakDayLabel(current)} is already complete for today.`;
+    } else if (current === 1) {
+        title = 'Your story streak starts today';
+        message = 'Come back tomorrow to keep it growing.';
+    } else if (current === 7) {
+        title = 'A full week of stories';
+        message = 'Seven days of showing up and sharing your life.';
+    } else if (current === 14) {
+        title = 'Two weeks of stories';
+        message = 'Your life story is becoming richer every day.';
+    } else if (current === 30) {
+        title = 'Thirty days of stories';
+        message = 'A remarkable month of memories and reflection.';
+    } else if (milestone) {
+        title = `${current} days of stories`;
+        message = 'A wonderful milestone in the story you are building.';
+    } else {
+        title = `${current} days of stories`;
+        message = 'You kept your story going today.';
+    }
+
+    el.streakCelebrationNumber.textContent = String(current);
+    el.streakCelebrationTitle.textContent = title;
+    el.streakCelebrationMessage.textContent = message;
+    el.streakCelebration.classList.toggle('is-milestone', milestone);
+    el.streakCelebration.classList.toggle('is-same-day', sameDay);
+    el.streakCelebration.setAttribute('aria-label', `${title}. ${message}`);
+    renderStreakTrail(el.finishStreakTrail, current, {
+        animateDay: advanced && current <= 7 ? current : 0,
+    });
+
+    // Reinsert the hidden state for one frame so repeat sessions can replay the
+    // entrance without keeping a distracting loop running.
+    el.streakCelebration.classList.add('hidden');
+    requestAnimationFrame(() => el.streakCelebration.classList.remove('hidden'));
+}
+
 async function wrapUpSession({ closingText = "Thank you for sharing all of that with me. I look forward to chatting more next time." } = {}) {
     if (state.isFinishing || state.sessionSaved) return;
+    dismissTopicChoice({ reason: 'session_ending' });
     el.liveTranscript.disabled      = true;
     el.btnProceed.disabled          = true;
     el.btnEndSession.disabled       = true;
@@ -2428,6 +2977,7 @@ async function finishSession() {
     el.btnProceed.disabled          = true;
     el.btnEndSession.disabled       = true;
     el.visualizerStatus.textContent = 'Saving session…';
+    el.streakCelebration.classList.add('hidden');
 
     if (state.sessionRecorder && state.sessionRecorder.state !== 'inactive') {
         state.sessionRecorder.stop();
@@ -2443,15 +2993,23 @@ async function finishSession() {
 
     await new Promise(r => setTimeout(r, 600));
 
+    const streakBefore = normalizeStreak(state.streakAtSessionStart || state.streak);
+
     // Save audio + transcript CSV
     const blob = new Blob(state.sessionChunks, { type: state.mimeType });
     const form = new FormData();
     form.append('session_id', state.sessionId);
     form.append('audio',      blob, 'session.webm');
     form.append('transcript', JSON.stringify(state.transcripts));
+    let saveSucceeded = false;
     try {
-        await fetch('/api/save_session', { method: 'POST', body: form });
+        const saveRes = await fetch('/api/save_session', { method: 'POST', body: form });
+        const saveData = await saveRes.json().catch(() => ({}));
+        if (!saveRes.ok || saveData.error) {
+            throw new Error(saveData.error || 'The session could not be saved.');
+        }
         state.sessionSaved = true;
+        saveSucceeded = true;
         // Remove partial-save files now that the full session is saved
         fetch('/api/cleanup-partial', {
             method:  'POST',
@@ -2462,7 +3020,41 @@ async function finishSession() {
         console.error('Save session failed:', e);
     }
 
-    // Update biography
+    let streakAfter = null;
+    if (saveSucceeded) {
+        const updatedStats = await fetchStats();
+        streakAfter = updatedStats?.streak
+            ? normalizeStreak(updatedStats.streak)
+            : estimatedStreakAfterCompletion(streakBefore);
+        state.streak = streakAfter;
+        applyStreakTheme(streakAfter);
+        renderHomeStreak(streakAfter);
+    }
+
+    el.statDuration.textContent   = formatDuration(durationSecs);
+    el.statWords.textContent      = state.totalWordCount;
+    el.statParagraphs.textContent = saveSucceeded ? 'Updating…' : '–';
+    el.finishTitle.textContent = saveSucceeded ? 'Session Complete' : 'Session Finished';
+    el.finishMessage.textContent = saveSucceeded
+        ? 'Thank you for sharing your story today.'
+        : 'We could not safely save this session. Please try again later.';
+    if (saveSucceeded) renderStreakCelebration(streakBefore, streakAfter);
+    else el.streakCelebration.classList.add('hidden');
+    const finishScreen = document.getElementById('screen-finish');
+    finishScreen.classList.toggle('save-failed', !saveSucceeded);
+    finishScreen.scrollTop = 0;
+    el.btnHome.disabled = saveSucceeded;
+    el.btnHome.textContent = saveSucceeded ? 'Updating your story…' : 'Back to Home';
+    showScreen('screen-finish');
+
+    if (!saveSucceeded) {
+        el.btnHome.disabled = false;
+        return;
+    }
+
+    // The reward is visible immediately. Biography work continues while the
+    // participant reads it, then the refreshed portrait begins painting.
+    loadPortrait();
     let bioParagraphs = '–';
     try {
         const bioRes  = await fetch('/api/update-biography', {
@@ -2470,20 +3062,17 @@ async function finishSession() {
             headers: { 'Content-Type': 'application/json' },
             body:    JSON.stringify({ session_id: state.sessionId, transcript: state.transcripts })
         });
-        const bioData = await bioRes.json();
+        const bioData = await bioRes.json().catch(() => ({}));
+        if (!bioRes.ok || bioData.error) throw new Error(bioData.error || 'Biography update failed.');
         bioParagraphs = bioData.biography_paragraphs ?? '–';
     } catch (e) {
         console.error('Biography update failed:', e);
     }
-
-    el.statDuration.textContent   = formatDuration(durationSecs);
-    el.statWords.textContent      = state.totalWordCount;
     el.statParagraphs.textContent = bioParagraphs;
-    showScreen('screen-finish');
-
-    // Show the previous portrait immediately, then stream the new one over it.
-    loadPortrait();
+    await fetchStats();
     startPortraitGeneration();
+    el.btnHome.textContent = 'Back to Home';
+    el.btnHome.disabled = false;
 }
 
 // ─── Waveform visualizer ──────────────────────────────────────────────────────
@@ -2513,9 +3102,9 @@ function drawVisualizer() {
 
     const amp   = el.liveTranscript.disabled ? 0.05 : (rms * 3 + 0.08);
     const waves = [
-        { color: 'rgba(59,130,246,0.65)', freq: 0.015, a: 22 },
-        { color: 'rgba(6,182,212,0.45)',  freq: 0.025, a: 14 },
-        { color: 'rgba(139,92,246,0.3)',  freq: 0.008, a: 30 },
+        { color: state.waveColors[0], freq: 0.015, a: 22 },
+        { color: state.waveColors[1], freq: 0.025, a: 14 },
+        { color: state.waveColors[2], freq: 0.008, a: 30 },
     ];
     const t = Date.now() * 0.003;
 
@@ -2582,6 +3171,12 @@ function latestPatientBubble() {
 }
 
 function handleConversationBubbleAction(event) {
+    const topicButton = event.target.closest('[data-topic-action]');
+    if (topicButton) {
+        handleTopicChoiceAction(topicButton);
+        return;
+    }
+
     const button = event.target.closest('[data-message-action]');
     if (!button) return;
     const bubble = button.closest('.message-bubble.patient');
@@ -2877,6 +3472,11 @@ function resetState() {
         conversationRevision:   0,
         answerRevisionInProgress: false,
         answerEditActive:       false,
+        topicChoiceActive:      false,
+        topicChoiceLocked:      false,
+        topicChoiceSeenIds:     [],
+        topicChoiceVisibleIds:  [],
+        streakAtSessionStart:   null,
         sessionId:              '',
         realtimeTranscriptionModel: null,
         // settings intentionally not reset — they persist across sessions

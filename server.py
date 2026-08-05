@@ -14,7 +14,8 @@ import time
 import urllib.request
 from difflib import SequenceMatcher
 from string import Template
-from datetime import datetime
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from flask import Flask, request, jsonify, send_from_directory, session, Response
 from openai import OpenAI
 
@@ -130,6 +131,10 @@ BUG_REPORTS_ROOT = 'bug reports'
 MAX_BUG_REPORT_CONTEXT_BYTES = 5 * 1024 * 1024
 MAX_BUG_REPORT_SCREENSHOT_BYTES = 15 * 1024 * 1024
 TRANSCRIPTION_DICTIONARY_FILENAME = 'transcription_dictionary.json'
+OPENING_HISTORY_FILENAME = 'opening_question_history.json'
+OPENING_HISTORY_LIMIT = 20
+OPENING_RECENCY_WINDOW = 6
+OPENING_HISTORY_LOCK = threading.Lock()
 TRANSCRIPTION_DELAY_OPTIONS = {'minimal', 'low', 'medium', 'high', 'xhigh'}
 TRANSCRIPTION_LANGUAGE_OPTIONS = {'', 'en', 'nl', 'de', 'fr', 'es', 'it', 'pt'}
 MAX_TRANSCRIPTION_DICTIONARY_ENTRIES = 200
@@ -1009,14 +1014,126 @@ def save_bug_report():
 
 # ─── Stats ──────────────────────────────────────────────────────────────────
 
+def _saved_session_dates(user_id=None):
+    """Return unique local dates for sessions that reached a saved CSV."""
+    output_dir = current_output_dir(user_id)
+    completed_dates = set()
+    if not os.path.isdir(output_dir):
+        return completed_dates
+
+    for name in os.listdir(output_dir):
+        directory_match = re.fullmatch(r'session_(\d{8}_\d{6})', name)
+        if directory_match:
+            session_id = directory_match.group(1)
+            csv_path = os.path.join(output_dir, name, f'session_{session_id}.csv')
+            if not os.path.isfile(csv_path):
+                continue
+        else:
+            legacy_match = re.fullmatch(r'session_(\d{8}_\d{6})\.csv', name)
+            if not legacy_match:
+                continue
+            session_id = legacy_match.group(1)
+
+        try:
+            completed_dates.add(datetime.strptime(session_id[:8], '%Y%m%d').date())
+        except ValueError:
+            continue
+
+    return completed_dates
+
+
+def _streak_theme_tier(current):
+    if current >= 30:
+        return 5
+    if current >= 14:
+        return 4
+    if current >= 7:
+        return 3
+    if current >= 3:
+        return 2
+    if current >= 1:
+        return 1
+    return 0
+
+
+def _calculate_streak(completed_dates, today=None):
+    """Calculate consecutive calendar-day streaks without penalizing this morning."""
+    today = today or datetime.now().astimezone().date()
+    dates = sorted({value for value in completed_dates if isinstance(value, date) and value <= today})
+    if not dates:
+        return {
+            'current': 0,
+            'longest': 0,
+            'completed_today': False,
+            'last_completed_date': None,
+            'status': 'no_sessions',
+            'theme_tier': 0,
+            'next_milestone': 1,
+        }
+
+    longest = 1
+    run = 1
+    for previous, current_date in zip(dates, dates[1:]):
+        if current_date == previous + timedelta(days=1):
+            run += 1
+            longest = max(longest, run)
+        else:
+            run = 1
+
+    latest = dates[-1]
+    latest_run = 1
+    cursor = latest
+    date_set = set(dates)
+    while cursor - timedelta(days=1) in date_set:
+        cursor -= timedelta(days=1)
+        latest_run += 1
+
+    if latest == today:
+        current = latest_run
+        status = 'active_today'
+    elif latest == today - timedelta(days=1):
+        current = latest_run
+        status = 'continue_today'
+    else:
+        current = 0
+        status = 'restart'
+
+    milestones = (1, 3, 7, 14, 30, 60, 100)
+    next_milestone = next((milestone for milestone in milestones if milestone > current), None)
+    return {
+        'current': current,
+        'longest': longest,
+        'completed_today': latest == today,
+        'last_completed_date': latest.isoformat(),
+        'status': status,
+        'theme_tier': _streak_theme_tier(current),
+        'next_milestone': next_milestone,
+    }
+
+
+def _request_today():
+    timezone_name = str(request.args.get('timezone') or '').strip()[:100]
+    if timezone_name:
+        try:
+            return datetime.now(ZoneInfo(timezone_name)).date(), timezone_name
+        except (ZoneInfoNotFoundError, ValueError):
+            pass
+    local_now = datetime.now().astimezone()
+    return local_now.date(), str(local_now.tzinfo or 'local')
+
 @app.route('/api/stats', methods=['GET'])
 def get_stats():
-    stats = read_stats()
-    bio = read_biography()
+    user_id = current_user_id()
+    stats = read_stats(user_id)
+    bio = read_biography(user_id)
     paragraphs = len([p for p in bio.split('\n\n') if p.strip()]) if bio else 0
+    today, timezone_name = _request_today()
+    streak = _calculate_streak(_saved_session_dates(user_id), today)
+    streak['timezone'] = timezone_name
     return jsonify({
         'session_count': stats.get('session_count', 0),
-        'biography_paragraphs': paragraphs
+        'biography_paragraphs': paragraphs,
+        'streak': streak,
     })
 
 # ─── Session plan (larger model generates greeting + question pool) ──────────
@@ -1044,6 +1161,8 @@ def session_plan():
         biography_keywords = _extract_biography_keywords(biography)
         stats        = read_stats(user_id)
         session_num  = stats.get('session_count', 0) + 1
+        recent_openings = _read_opening_history(user_id)[:OPENING_RECENCY_WINDOW]
+        recent_openings_text = _opening_history_prompt(recent_openings)
 
         system_prompt = "\n\n---\n\n".join(filter(None, [
             get_effective_personality(user_id),
@@ -1058,6 +1177,7 @@ def session_plan():
                 f"Current biography:\n{biography}\n\n"
                 "Biography-specific keyword hints for question metadata "
                 f"(people, places, roles, hobbies, objects): {', '.join(biography_keywords) or '(none)'}\n\n"
+                f"{recent_openings_text}\n\n"
                 "Generate the personalized greeting and question pool."
             )
         else:
@@ -1080,6 +1200,21 @@ def session_plan():
 
         result = json.loads(completion.choices[0].message.content)
         questions = _normalize_question_pool(result.get('questions', []))
+        opening_question, questions, opening_selection = _select_session_opening(
+            questions,
+            recent_openings,
+        )
+        greeting = _opening_greeting(
+            result.get('greeting', ''),
+            opening_question,
+            user_id,
+            session_num,
+            opening_selection.get('original_index', 0),
+        )
+        # The lead-ins are planning-only data. Keeping them out of the browser's
+        # remaining pool avoids sending eight unused greetings back on every turn.
+        for question in questions:
+            question.pop('opening_lead_in', None)
 
         write_debug(user_id, {
             'session_number':    session_num,
@@ -1088,13 +1223,21 @@ def session_plan():
             'biography_keywords': biography_keywords,
             'model':             question_model,
             'output':            result,
+            'recent_openings':   recent_openings,
+            'opening_selection': opening_selection,
             'normalized_questions': questions
         }, 'session_plan')
+
+        if opening_question:
+            try:
+                _remember_opening_question(user_id, session_id, opening_question)
+            except OSError as history_error:
+                print(f"Opening-question history could not be saved: {history_error}")
 
         return jsonify({
             'session_id': session_id,
             'realtime_transcription_model': models['realtime_transcription'],
-            'greeting':  result.get('greeting',  f'Hello, {user_id}! How has your day been?'),
+            'greeting':  greeting,
             'questions': questions
         })
 
@@ -1291,6 +1434,28 @@ def _question_keywords(entry):
     return keywords[:12]
 
 
+def _question_id(text):
+    """Stable identifier for a prepared question as its pool is reordered."""
+    normalized = re.sub(r'\s+', ' ', str(text or '')).strip().casefold()
+    return f"q_{hashlib.sha256(normalized.encode('utf-8')).hexdigest()[:12]}"
+
+
+def _question_brief(entry, topic, keywords):
+    """Return a compact chooser label, including a safe legacy-plan fallback."""
+    raw = entry.get('brief_description', '') if isinstance(entry, dict) else ''
+    brief = re.sub(r'\s+', ' ', str(raw or '')).strip(' \t\r\n.,;:!?')
+    if brief:
+        return brief[:72].rstrip()
+
+    topic_label = (topic or 'life story').replace('_', ' ')
+    if keywords:
+        detail = ' and '.join(keywords[:2])
+        fallback = f"{topic_label.title()}: {detail}"
+    else:
+        fallback = topic_label.title()
+    return fallback[:72].rstrip()
+
+
 def _normalize_question_entry(entry):
     text = _question_text(entry)
     if not text:
@@ -1303,6 +1468,18 @@ def _normalize_question_entry(entry):
     normalized['topic'] = _question_topic(normalized) or 'unknown'
     normalized['mode'] = str(normalized.get('mode') or 'unknown').strip() or 'unknown'
     normalized['keywords'] = _question_keywords(normalized)
+    sensitivity = str(normalized.get('sensitivity') or 'unknown').lower().strip()
+    normalized['sensitivity'] = sensitivity if sensitivity in {'low', 'medium', 'high'} else 'unknown'
+    normalized['brief_description'] = _question_brief(
+        normalized,
+        normalized['topic'],
+        normalized['keywords']
+    )
+    opening_lead_in = re.sub(
+        r'\s+', ' ', str(normalized.get('opening_lead_in') or '')
+    ).strip()
+    normalized['opening_lead_in'] = opening_lead_in[:600]
+    normalized['id'] = _question_id(text)
     return normalized
 
 
@@ -1315,11 +1492,219 @@ def _normalize_question_pool(prepared_questions):
     return normalized
 
 
+def _opening_history_path(user_id):
+    return os.path.join(current_subject_dir(user_id), OPENING_HISTORY_FILENAME)
+
+
+def _opening_history_entry(entry, session_id='', selected_at=''):
+    question = _normalize_question_entry(entry)
+    if not question:
+        return None
+    return {
+        'session_id': normalize_session_id(session_id or question.get('session_id')),
+        'selected_at': str(selected_at or question.get('selected_at') or '')[:64],
+        'id': question['id'],
+        'text': question['text'],
+        'brief_description': question['brief_description'],
+        'topic': question['topic'],
+        'mode': question['mode'],
+        'keywords': question['keywords'],
+        'sensitivity': question['sensitivity'],
+    }
+
+
+def _opening_history_from_logs(user_id):
+    """Seed rotation from existing plans when a participant has no history file yet."""
+    pattern = os.path.join(
+        current_output_dir(user_id), 'session_*', 'session_log', '*_session_plan.json'
+    )
+    paths = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
+    history = []
+    seen_sessions = set()
+    for path in paths:
+        session_folder = os.path.basename(os.path.dirname(os.path.dirname(path)))
+        session_id = session_folder.removeprefix('session_')
+        if session_id in seen_sessions:
+            continue
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                plan = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            continue
+        questions = plan.get('normalized_questions') or plan.get('output', {}).get('questions') or []
+        if not questions:
+            continue
+        entry = _opening_history_entry(
+            questions[0],
+            session_id=session_id,
+            selected_at=datetime.fromtimestamp(os.path.getmtime(path)).isoformat(),
+        )
+        if entry:
+            history.append(entry)
+            seen_sessions.add(session_id)
+        if len(history) >= OPENING_HISTORY_LIMIT:
+            break
+    return history
+
+
+def _read_opening_history(user_id):
+    path = _opening_history_path(user_id)
+    if not os.path.exists(path):
+        return _opening_history_from_logs(user_id)
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            payload = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return _opening_history_from_logs(user_id)
+
+    raw_history = payload.get('openings', []) if isinstance(payload, dict) else payload
+    if not isinstance(raw_history, list):
+        return _opening_history_from_logs(user_id)
+    history = []
+    for raw_entry in raw_history:
+        entry = _opening_history_entry(raw_entry)
+        if entry:
+            history.append(entry)
+    return history[:OPENING_HISTORY_LIMIT]
+
+
+def _remember_opening_question(user_id, session_id, question):
+    """Persist the selected opening; newest entries are kept first."""
+    entry = _opening_history_entry(
+        question,
+        session_id=session_id,
+        selected_at=datetime.now().isoformat(),
+    )
+    if not entry:
+        return
+    with OPENING_HISTORY_LOCK:
+        history = [
+            previous for previous in _read_opening_history(user_id)
+            if previous.get('session_id') != entry['session_id']
+        ]
+        history.insert(0, entry)
+        destination = _opening_history_path(user_id)
+        temp_path = destination + '.tmp'
+        with open(temp_path, 'w', encoding='utf-8') as f:
+            json.dump(
+                {'openings': history[:OPENING_HISTORY_LIMIT]},
+                f,
+                indent=2,
+                ensure_ascii=False,
+            )
+        os.replace(temp_path, destination)
+
+
+def _opening_history_prompt(recent_openings):
+    if not recent_openings:
+        return 'There are no recent opening questions to avoid.'
+    lines = []
+    for opening in recent_openings:
+        topic = opening.get('topic') or 'unknown'
+        lines.append(f"- [{topic}] {opening.get('text', '')}")
+    return (
+        "Recent opening questions, newest first:\n"
+        + '\n'.join(lines)
+        + "\nDo not reuse or closely paraphrase these as questions[0]. Prefer a different "
+          "topic from the most recent openings while keeping the opening gentle."
+    )
+
+
+_OPENING_TOPIC_PENALTIES = (30, 20, 12, 7, 4, 2)
+_OPENING_TEXT_PENALTIES = (42, 30, 21, 14, 8, 4)
+
+
+def _opening_text_similarity(left, right):
+    left = _normalize_question_for_match(left)
+    right = _normalize_question_for_match(right)
+    if not left or not right:
+        return 0.0
+    return SequenceMatcher(None, left, right).ratio()
+
+
+def _select_session_opening(prepared_questions, recent_openings):
+    """Choose a gentle opener while strongly rotating recent topics and wording."""
+    questions = _normalize_question_pool(prepared_questions)
+    if not questions:
+        return None, [], {'original_index': None, 'reason': 'empty_pool', 'scores': []}
+
+    low_sensitivity = [
+        (idx, question) for idx, question in enumerate(questions)
+        if question.get('sensitivity') == 'low'
+    ]
+    non_high = [
+        (idx, question) for idx, question in enumerate(questions)
+        if question.get('sensitivity') != 'high'
+    ]
+    candidates = low_sensitivity or non_high or list(enumerate(questions))
+    scored = []
+    for idx, question in candidates:
+        # Preserve some of the planner's intended conversational order, but make
+        # recent repetition substantially more expensive than moving down the pool.
+        score = 20.0 - (idx * 0.75)
+        reasons = []
+        question_topic = _normalize_topic(question.get('topic', ''))
+        for recency, previous in enumerate(recent_openings[:OPENING_RECENCY_WINDOW]):
+            if question.get('id') == previous.get('id'):
+                score -= 60
+                reasons.append(f'exact_repeat_{recency + 1}')
+            if question_topic and question_topic == _normalize_topic(previous.get('topic', '')):
+                penalty = _OPENING_TOPIC_PENALTIES[recency]
+                score -= penalty
+                reasons.append(f'recent_topic_{recency + 1}:-{penalty}')
+            similarity = _opening_text_similarity(question.get('text'), previous.get('text'))
+            if similarity >= 0.58:
+                penalty = round(_OPENING_TEXT_PENALTIES[recency] * similarity, 2)
+                score -= penalty
+                reasons.append(f'similar_text_{recency + 1}:-{penalty}')
+        scored.append((score, idx, question, reasons))
+
+    score, selected_idx, selected, reasons = max(scored, key=lambda item: (item[0], -item[1]))
+    reordered = [selected] + questions[:selected_idx] + questions[selected_idx + 1:]
+    score_log = [
+        {
+            'id': question.get('id'),
+            'topic': question.get('topic'),
+            'original_index': idx,
+            'score': round(candidate_score, 2),
+            'penalties': candidate_reasons,
+        }
+        for candidate_score, idx, question, candidate_reasons in sorted(scored, reverse=True)
+    ]
+    return selected, reordered, {
+        'original_index': selected_idx,
+        'score': round(score, 2),
+        'penalties': reasons,
+        'scores': score_log,
+    }
+
+
+def _opening_greeting(model_greeting, opening_question, user_id, session_num, original_index):
+    if not opening_question:
+        return model_greeting or f'Hello, {user_id}! How has your day been?'
+    lead_in = str(opening_question.get('opening_lead_in') or '').strip()
+    if lead_in:
+        return lead_in
+    if original_index == 0 and str(model_greeting or '').strip():
+        return str(model_greeting).strip()
+    if session_num <= 1:
+        return (
+            f"Hello, {user_id}. It is lovely to meet you. I have a few ideas for where we "
+            "might begin, but you can choose another subject if you prefer."
+        )
+    return (
+        f"Hello, {user_id}. It is good to see you again. I would love to continue your story, "
+        "and you can choose another subject if you prefer."
+    )
+
+
 def _question_meta(entry):
     question = _normalize_question_entry(entry)
     if not question:
         return {'topic': 'unknown', 'mode': 'unknown', 'keywords': []}
     return {
+        'id': question.get('id', ''),
+        'brief_description': question.get('brief_description', ''),
         'topic': question.get('topic', 'unknown'),
         'mode': question.get('mode', 'unknown'),
         'keywords': question.get('keywords', []),

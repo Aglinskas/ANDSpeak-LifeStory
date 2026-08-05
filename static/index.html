@@ -224,6 +224,14 @@
 	                            </svg>
 	                        </button>
 
+                            <section id="home-streak" class="home-streak" aria-live="polite" aria-label="Story streak">
+                                <div id="home-streak-trail" class="streak-trail" aria-hidden="true">
+                                    <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+                                </div>
+                                <div id="home-streak-message" class="home-streak-message">Start your story streak</div>
+                                <div id="home-streak-detail" class="home-streak-detail">Share a little of your story today</div>
+                            </section>
+
 	                        <p class="home-description">
 	                            Today's session will explore your life through conversation. Speak naturally — your story is being built, one session at a time.
 	                        </p>
@@ -404,6 +412,21 @@
 
                     <h2 class="finish-title">Session Complete</h2>
                     <p class="finish-message">Thank you for sharing your story today.</p>
+
+                    <section id="streak-celebration" class="streak-celebration hidden" aria-live="polite">
+                        <div class="streak-flame" aria-hidden="true">
+                            <svg viewBox="0 0 64 80" fill="none">
+                                <path class="streak-flame-outer" d="M36 3c3 14-5 18-1 29 3-5 9-8 14-15 7 10 11 20 9 32-2 17-14 28-29 28S3 66 4 50c1-13 9-23 20-35 0 10 3 15 7 18C27 20 34 15 36 3Z"/>
+                                <path class="streak-flame-inner" d="M31 70c-8 0-14-6-13-15 0-7 5-12 10-18 0 6 2 9 5 11 0-6 3-10 6-15 5 7 8 13 7 21-1 10-7 16-15 16Z"/>
+                            </svg>
+                            <span id="streak-celebration-number" class="streak-flame-number">1</span>
+                        </div>
+                        <h3 id="streak-celebration-title" class="streak-celebration-title">Your story streak starts today</h3>
+                        <p id="streak-celebration-message" class="streak-celebration-message">Come back tomorrow to keep it growing.</p>
+                        <div id="finish-streak-trail" class="streak-trail streak-trail-finish" aria-hidden="true">
+                            <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+                        </div>
+                    </section>
 
                     <div class="portrait-frame" id="finish-portrait-frame">
                         <img class="portrait-img" id="finish-portrait" alt="Your life-story portrait">

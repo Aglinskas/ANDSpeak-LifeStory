@@ -21,6 +21,11 @@ Key Features
   - Voice-led life-story interviews: AI asks personalized biographical questions using text-to-speech.
   - Adaptive conversation: Follow-up questions respond to new people, pets, events, and meaningful details
     while respecting declined topics.
+  - Participant-led opening: Recent opening questions and topics are remembered so sessions begin in a
+    fresh, gentle direction. The opening also includes three refreshable personalized alternatives and an
+    option to introduce any other topic.
+  - Story streaks: Consecutive saved-session days unlock a seven-dot progress trail, increasingly colorful
+    app-wide themes, and a calm animated celebration after each completed conversation.
   - Answer correction: The newest participant message can be edited or retaken. Editing updates the saved
     transcript and regenerates the agent's reply; retaking removes the answer and reply and reopens the
     original question for recording.

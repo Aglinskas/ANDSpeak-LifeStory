@@ -76,20 +76,31 @@ Displays two live statistics fetched from the server:
 - **Sessions completed** — running count of finished sessions
 - **Biography paragraphs** — number of paragraphs currently in the biography file
 
+Below the start button, a seven-dot story trail and contextual message show the participant's current
+consecutive-day streak. Saved session CSV dates are the source of truth, so existing users receive an
+accurate streak without migration and multiple sessions on one day count once. A streak remains active
+through the day after the latest session, giving the participant that full day to continue it.
+
+The current streak also selects an authenticated app-wide color tier. Home, chat, settings, session lists,
+menus, waveform colors, and the finish screen all use the same semantic theme variables. Completing a saved
+session immediately shows a flame-and-number celebration; biography and portrait generation continue while
+the participant views the reward.
+
 These are the primary engagement metrics. A patient who sees "12 sessions / 8 biography paragraphs" has a clear sense of progress and something to protect.
 
-### 4.2 Biographical question generation (GPT-5-nano)
+### 4.2 Biographical question generation
 
-At session start, the server reads the patient's `biography.txt` file and passes it to GPT-5-nano with a system prompt asking for 5–7 conversational biographical questions. The model is instructed to:
+At session start, the server reads the participant's `biography.txt` file and passes it to the configured question-preparation model with a system prompt asking for 8–10 structured conversational biographical questions. The model is instructed to:
 - Fill gaps in the existing biography
 - Deepen areas already mentioned
 - Vary topics across childhood, family, relationships, work, hobbies, values, memories
+- Provide a short, concrete `brief_description` for each full question
 
 If the biography is empty (first session), the model is told to start with foundational questions about upbringing and family.
 
-The first question is always hardcoded: *"Hello! How are you feeling today?"* — this provides a warm, consistent opener and a brief mood-check that is itself useful biomarker data.
+The server keeps a bounded per-participant history of recent opening questions. That history is supplied to the planner, then a server-side recency score selects among the low-sensitivity questions, strongly penalising recently used topics and similar wording. Existing session-plan logs seed the history for returning participants. Each prepared question includes its own personalized `opening_lead_in`, so the greeting still recalls a relevant known detail even when the server selects a question other than the planner's first choice.
 
-Generated questions are returned as a JSON array and stored in the frontend as `state.questions`.
+After the opening question, the participant can simply answer or select **Choose topic**. The inline chooser displays three brief descriptions sampled from the remaining prepared pool plus **Suggest my own**. Refreshing rotates the prepared suggestions without consuming them; selecting one removes that question from the pool and asks its full text. High-sensitivity questions are avoided when enough gentler alternatives exist.
 
 ### 4.3 Text-to-speech (TTS)
 
@@ -204,7 +215,7 @@ Flask server running on `http://127.0.0.1:5001`. All routes:
 | Route | Method | Purpose |
 |---|---|---|
 | `/` | GET | Serves `index.html` |
-| `/api/stats` | GET | Returns `{ session_count, biography_paragraphs }` |
+| `/api/stats` | GET | Returns session/biography totals plus current and longest story-streak state |
 | `/api/session-plan` | POST | Reads biography → GPT-5-nano → returns question list |
 | `/api/realtime-token` | POST | Creates a short-lived client secret for a transcription-only WebRTC session |
 | `/api/settings` | GET/POST | Loads and saves settings for the logged-in user |
@@ -231,7 +242,8 @@ Key functions and their responsibilities:
 - `goHome()` — tears down audio state, resets all state, returns to home screen
 
 **Chatbot dialogue:**
-- `askCurrentQuestion()` — adds chatbot message to chat, plays TTS, disables input during playback
+- `askDynamicQuestion()` — adds the agent turn to chat, plays TTS, and disables input during playback
+- `sampleTopicChoices()` — draws diverse opening alternatives while avoiding immediate repeats
 - `enablePatientTurn()` — re-enables textarea and button after TTS ends
 - `handleProceed()` — saves patient response, increments word count, advances to next question or calls `finishSession()`
 
